@@ -4,12 +4,21 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const lib = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/lib/root.zig"),
+    });
+
     const exe = b.addExecutable(.{
         .name = "shinobi",
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
             .root_source_file = b.path("src/cli/main.zig"),
+            .imports = &.{
+                .{ .name = "lib", .module = lib },
+            },
         }),
     });
 
