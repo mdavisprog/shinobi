@@ -36,9 +36,16 @@ pub fn build(b: *std.Build) !void {
 
     // Set up the 'test' step.
     const test_step = b.step("test", "Run tests");
+    const lib_test = b.addTest(.{
+        .root_module = lib,
+    });
+    const lib_test_run = b.addRunArtifact(lib_test);
+    test_step.dependOn(&lib_test_run.step);
+
     const exe_test = b.addTest(.{
         .root_module = exe.root_module,
     });
-    const test_run = b.addRunArtifact(exe_test);
-    test_step.dependOn(&test_run.step);
+    const exe_test_run = b.addRunArtifact(exe_test);
+    test_step.dependOn(&exe_test_run.step);
+
 }
