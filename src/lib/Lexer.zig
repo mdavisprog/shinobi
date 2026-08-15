@@ -7,6 +7,7 @@ pub const Token = struct {
         rule,
         ident,
         equals,
+        new_line,
     };
 
     token_type: Type,
@@ -32,9 +33,26 @@ pub fn nextToken(self: *Self) ?Token {
 
     const start = self.current;
 
+    var is_new_line = false;
     while (self.current < self.stream.len) : (self.current += 1) {
-        if (std.ascii.isWhitespace(self.stream[self.current])) {
+        const ch = self.stream[self.current];
+
+        if (isWhitespace(ch)) {
             break;
+        }
+
+        if (is_new_line) {
+            if (!isWhitespace(ch)) {
+                break;
+            }
+        }
+
+        if (ch == '\n') {
+            if (start < self.current) {
+                break;
+            } else {
+                is_new_line = true;
+            }
         }
     }
 
@@ -46,6 +64,8 @@ pub fn nextToken(self: *Self) ?Token {
         return .init(.rule, slice);
     } else if (std.mem.eql(u8, slice, "=")) {
         return .init(.equals, slice);
+    } else if (std.mem.eql(u8, slice, "\n")) {
+        return .init(.new_line, slice);
     } else if (slice.len > 0) {
         return .init(.ident, slice);
     }
@@ -55,10 +75,14 @@ pub fn nextToken(self: *Self) ?Token {
 
 fn skipWhitespaces(self: *Self) void {
     while (self.current < self.stream.len) : (self.current += 1) {
-        if (!std.ascii.isWhitespace(self.stream[self.current])) {
+        if (!isWhitespace(self.stream[self.current])) {
             break;
         }
     }
+}
+
+fn isWhitespace(char: u8) bool {
+    return char == ' ' or char == '\t' or char == '\r';
 }
 
 test "lexer" {
@@ -76,8 +100,11 @@ test "lexer" {
     try expectEqualToken(.init(.ident, "cflags"), lexer.nextToken());
     try expectEqualToken(.init(.equals, "="), lexer.nextToken());
     try expectEqualToken(.init(.ident, "-Wall"), lexer.nextToken());
+    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
+    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
     try expectEqualToken(.init(.rule, "rule"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "cc"), lexer.nextToken());
+    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "command"), lexer.nextToken());
     try expectEqualToken(.init(.equals, "="), lexer.nextToken());
     try expectEqualToken(.init(.ident, "gcc"), lexer.nextToken());
@@ -86,6 +113,8 @@ test "lexer" {
     try expectEqualToken(.init(.ident, "$in"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "-o"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "$out"), lexer.nextToken());
+    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
+    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
     try expectEqualToken(.init(.build, "build"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "foo.o:"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "cc"), lexer.nextToken());
