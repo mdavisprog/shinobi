@@ -8,6 +8,7 @@ pub const Token = struct {
         ident,
         equals,
         new_line,
+        indent,
     };
 
     token_type: Type,
@@ -23,37 +24,57 @@ const Self = @This();
 
 stream: []const u8,
 current: usize = 0,
+start_of_line: bool = true,
 
 pub fn initStream(stream: []const u8) Self {
     return .{ .stream = stream };
 }
 
 pub fn nextToken(self: *Self) ?Token {
-    self.skipWhitespaces();
+    if (self.current >= self.stream.len) return null;
 
-    const start = self.current;
+    var start = self.current;
 
-    var is_new_line = false;
-    while (self.current < self.stream.len) : (self.current += 1) {
-        const ch = self.stream[self.current];
-
-        if (isWhitespace(ch)) {
-            break;
-        }
-
-        if (is_new_line) {
-            if (!isWhitespace(ch)) {
-                break;
+    var found_token = false;
+    state: switch (self.stream[self.current]) {
+        ' ', '\t' => {
+            // This is an indentation
+            if (self.start_of_line) {
+                self.start_of_line = false;
+                while (self.advance()) |ch| {
+                    if (ch != ' ' and ch != '\t') {
+                        return .init(.indent, "");
+                    }
+                }
             }
-        }
 
-        if (ch == '\n') {
-            if (start < self.current) {
-                break;
+            if (!found_token) {
+                if (self.advance()) |ch| {
+                    start = self.current;
+                    continue :state ch;
+                } else {
+                    break :state;
+                }
             } else {
-                is_new_line = true;
+                break :state;
             }
-        }
+        },
+        '\r' => {
+            if (self.advance()) |ch| continue :state ch else break :state;
+        },
+        '\n' => {
+            if (!found_token) {
+                found_token = true;
+                self.current += 1;
+            }
+
+            break : state;
+        },
+        else => {
+            self.start_of_line = false;
+            found_token = true;
+            if (self.advance()) |ch| continue :state ch else break :state;
+        },
     }
 
     const slice = self.stream[start..self.current];
@@ -65,6 +86,7 @@ pub fn nextToken(self: *Self) ?Token {
     } else if (std.mem.eql(u8, slice, "=")) {
         return .init(.equals, slice);
     } else if (std.mem.eql(u8, slice, "\n")) {
+        self.start_of_line = true;
         return .init(.new_line, slice);
     } else if (slice.len > 0) {
         return .init(.ident, slice);
@@ -73,16 +95,17 @@ pub fn nextToken(self: *Self) ?Token {
     return null;
 }
 
-fn skipWhitespaces(self: *Self) void {
-    while (self.current < self.stream.len) : (self.current += 1) {
-        if (!isWhitespace(self.stream[self.current])) {
-            break;
-        }
+fn advance(self: *Self) ?u8 {
+    if (self.current >= self.stream.len) {
+        return null;
     }
-}
 
-fn isWhitespace(char: u8) bool {
-    return char == ' ' or char == '\t' or char == '\r';
+    self.current += 1;
+
+    return if (self.current < self.stream.len)
+        self.stream[self.current]
+    else
+        null;
 }
 
 test "lexer" {
@@ -90,7 +113,7 @@ test "lexer" {
     \\cflags = -Wall
     \\
     \\rule cc
-    \\command = gcc $cflags -c $in -o $out
+    \\    command = gcc $cflags -c $in -o $out
     \\
     \\build foo.o: cc foo.c
     ;
@@ -105,6 +128,7 @@ test "lexer" {
     try expectEqualToken(.init(.rule, "rule"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "cc"), lexer.nextToken());
     try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
+    try expectEqualToken(.init(.indent, ""), lexer.nextToken());
     try expectEqualToken(.init(.ident, "command"), lexer.nextToken());
     try expectEqualToken(.init(.equals, "="), lexer.nextToken());
     try expectEqualToken(.init(.ident, "gcc"), lexer.nextToken());
