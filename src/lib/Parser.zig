@@ -1,3 +1,4 @@
+const BuildStatement = @import("BuildStatement.zig");
 const Lexer = @import("Lexer.zig");
 const Rule = @import("Rule.zig");
 const std = @import("std");
@@ -13,12 +14,14 @@ const Self = @This();
 lexer: Lexer,
 variables: std.StringHashMapUnmanaged(Variable),
 rules: std.StringHashMapUnmanaged(Rule),
+builds: std.ArrayListUnmanaged(BuildStatement),
 
 pub fn init(stream: []const u8) Self {
     return .{
         .lexer = .initStream(stream),
         .variables = .empty,
         .rules = .empty,
+        .builds = .empty,
     };
 }
 
@@ -38,6 +41,11 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         }
         self.rules.deinit(allocator);
     }
+
+    for (self.builds.items) |*build| {
+        build.deinit(allocator);
+    }
+    self.builds.deinit(allocator);
 }
 
 pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
@@ -53,6 +61,10 @@ pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
             .rule => {
                 const rule = try self.parseRule(allocator);
                 try self.rules.put(allocator, rule.name, rule);
+            },
+            .build => {
+                const build = try self.parseBuild(allocator);
+                try self.builds.append(allocator, build);
             },
             else => {},
         }
@@ -113,6 +125,38 @@ fn parseRule(self: *Self, allocator: std.mem.Allocator) !Rule {
     return rule;
 }
 
+fn parseBuild(self: *Self, allocator: std.mem.Allocator) !BuildStatement {
+    var build = BuildStatement.init();
+    errdefer build.deinit(allocator);
+
+    var parsing_outputs = true;
+    var parsing_rule = true;
+    outer: while (self.lexer.nextToken()) |token| {
+        switch (token.token_type) {
+            .ident => {
+                if (parsing_outputs) {
+                    try build.outputs.append(allocator, try allocator.dupe(u8, token.data));
+                } else {
+                    if (parsing_rule) {
+                        build.rule = try allocator.dupe(u8, token.data);
+                        parsing_rule = false;
+                    } else {
+                        try build.inputs.append(allocator, try allocator.dupe(u8, token.data));
+                    }
+                }
+            },
+            .colon => {
+                parsing_outputs = false;
+            },
+            else => {
+                break :outer;
+            },
+        }
+    }
+
+    return build;
+}
+
 test "parser" {
     const stream = 
     \\cflags = -Wall
@@ -140,4 +184,12 @@ test "parser" {
     try std.testing.expectEqualStrings("cc", rule.name);
     try std.testing.expectEqualStrings("command", rule.variables.get("command").?.name);
     try std.testing.expectEqualStrings("gcc $cflags -c $in -o $out", rule.variables.get("command").?.value);
+
+    const build = parser.builds.items[0];
+    try std.testing.expectEqual(1, parser.builds.items.len);
+    try std.testing.expectEqual(1, build.outputs.items.len);
+    try std.testing.expectEqual(1, build.inputs.items.len);
+    try std.testing.expectEqualStrings("cc", build.rule.?);
+    try std.testing.expectEqualStrings("foo.o", build.outputs.items[0]);
+    try std.testing.expectEqualStrings("foo.c", build.inputs.items[0]);
 }
