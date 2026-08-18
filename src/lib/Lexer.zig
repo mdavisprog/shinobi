@@ -9,6 +9,7 @@ pub const Token = struct {
         equals,
         new_line,
         indent,
+        colon,
     };
 
     token_type: Type,
@@ -62,13 +63,13 @@ pub fn nextToken(self: *Self) ?Token {
         '\r' => {
             if (self.advance()) |ch| continue :state ch else break :state;
         },
-        '\n' => {
+        '\n', ':' => {
             if (!found_token) {
                 found_token = true;
                 self.current += 1;
             }
 
-            break : state;
+            break :state;
         },
         else => {
             self.start_of_line = false;
@@ -88,6 +89,8 @@ pub fn nextToken(self: *Self) ?Token {
     } else if (std.mem.eql(u8, slice, "\n")) {
         self.start_of_line = true;
         return .init(.new_line, slice);
+    } else if (std.mem.eql(u8, slice, ":")) {
+        return .init(.colon, ":");
     } else if (slice.len > 0) {
         return .init(.ident, slice);
     }
@@ -140,7 +143,8 @@ test "lexer" {
     try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
     try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
     try expectEqualToken(.init(.build, "build"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "foo.o:"), lexer.nextToken());
+    try expectEqualToken(.init(.ident, "foo.o"), lexer.nextToken());
+    try expectEqualToken(.init(.colon, ":"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "cc"), lexer.nextToken());
     try expectEqualToken(.init(.ident, "foo.c"), lexer.nextToken());
 }
