@@ -46,12 +46,15 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         build.deinit(allocator);
     }
     self.builds.deinit(allocator);
+
+    self.lexer.deinit(allocator);
 }
 
 pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
     var last_token: ?Lexer.Token = null;
+    defer if (last_token) |token| token.deinit(allocator);
 
-    while (self.lexer.nextToken()) |token| {
+    while (try self.lexer.nextToken(allocator)) |token| {
         switch (token.token_type) {
             .equals => {
                 const last = last_token orelse unreachable;
@@ -69,6 +72,7 @@ pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
             else => {},
         }
 
+        if (last_token) |last| last.deinit(allocator);
         last_token = token;
     }
 }
@@ -76,7 +80,9 @@ pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
 fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.Token) !Variable {
     var value = std.ArrayListUnmanaged(u8).empty;
 
-    while (self.lexer.nextToken()) |token| {
+    while (try self.lexer.nextToken(allocator)) |token| {
+        defer token.deinit(allocator);
+
         switch (token.token_type) {
             .ident => {
                 if (value.items.len > 0) {
@@ -96,17 +102,21 @@ fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.To
 }
 
 fn parseRule(self: *Self, allocator: std.mem.Allocator) !Rule {
-    const name = self.lexer.nextToken() orelse return Error.InvalidRule;
+    const name = try self.lexer.nextToken(allocator) orelse return Error.InvalidRule;
+    defer name.deinit(allocator);
     if (name.token_type != .ident) return Error.InvalidRule;
 
     var rule = Rule.init(try allocator.dupe(u8, name.data));
     errdefer rule.deinit(allocator);
 
-    const new_line = self.lexer.nextToken() orelse return Error.InvalidRule;
+    const new_line = try self.lexer.nextToken(allocator) orelse return Error.InvalidRule;
+    defer new_line.deinit(allocator);
     if (new_line.token_type != .new_line) return Error.InvalidRule;
 
     var last_token: ?Lexer.Token = null;
-    outer: while (self.lexer.nextToken()) |token| {
+    defer if (last_token) |token| token.deinit(allocator);
+
+    outer: while (try self.lexer.nextToken(allocator)) |token| {
         switch (token.token_type) {
             .equals => {
                 const last = last_token orelse return Error.InvalidRule;
@@ -114,11 +124,13 @@ fn parseRule(self: *Self, allocator: std.mem.Allocator) !Rule {
                 try rule.variables.put(allocator, variable.name, variable);
             },
             .new_line => {
+                token.deinit(allocator);
                 break :outer;
             },
             else => {},
         }
 
+        if (last_token) |last| last.deinit(allocator);
         last_token = token;
     }
 
@@ -131,7 +143,9 @@ fn parseBuild(self: *Self, allocator: std.mem.Allocator) !BuildStatement {
 
     var parsing_outputs = true;
     var parsing_rule = true;
-    outer: while (self.lexer.nextToken()) |token| {
+    outer: while (try self.lexer.nextToken(allocator)) |token| {
+        defer token.deinit(allocator);
+
         switch (token.token_type) {
             .ident => {
                 if (parsing_outputs) {

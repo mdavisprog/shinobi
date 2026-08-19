@@ -1,3 +1,5 @@
+pub const Parser = @import("Parser.zig");
+
 const std = @import("std");
 
 test "lib" {

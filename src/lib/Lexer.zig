@@ -15,6 +15,10 @@ pub const Token = struct {
     token_type: Type,
     data: []const u8,
 
+    pub fn deinit(self: Token, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+    }
+
     fn init(token_type: Type, data: []const u8) Token {
         return .{ .token_type = token_type, .data = data };
     }
@@ -23,62 +27,82 @@ pub const Token = struct {
 /// Struct to analyze a buffer stream to be parsed into tokens.
 const Self = @This();
 
-stream: []const u8,
-current: usize = 0,
+reader: std.Io.Reader,
+token: std.ArrayListUnmanaged(u8) = .empty,
 start_of_line: bool = true,
 
 pub fn initStream(stream: []const u8) Self {
-    return .{ .stream = stream };
+    return .{
+        .reader = .fixed(stream),
+    };
 }
 
-pub fn nextToken(self: *Self) ?Token {
-    if (self.current >= self.stream.len) return null;
+pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    self.token.deinit(allocator);
+}
 
-    var start = self.current;
+pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
+    self.token.clearRetainingCapacity();
 
     var found_token = false;
-    state: switch (self.stream[self.current]) {
-        ' ', '\t' => {
-            // This is an indentation
-            if (self.start_of_line) {
-                self.start_of_line = false;
-                while (self.advance()) |ch| {
-                    if (ch != ' ' and ch != '\t') {
-                        return .init(.indent, "");
+    outer: while (true) : (self.reader.toss(1)) {
+        const ch = self.reader.peekByte() catch |err| {
+            if (err == error.EndOfStream) {
+                break :outer;
+            }
+
+            return err;
+        };
+
+        switch (ch) {
+            ' ', '\t' => {
+                // This is an indentation
+                if (self.start_of_line) {
+                    self.start_of_line = false;
+                    while (true) {
+                        const space = self.reader.peekByte() catch |err| {
+                            if (err == error.EndOfStream) {
+                                break;
+                            }
+
+                            return err;
+                        };
+
+                        if (space != ' ' and space != '\t') {
+                            return .init(.indent, "");
+                        }
+
+                        self.reader.toss(1);
                     }
                 }
-            }
 
-            if (!found_token) {
-                if (self.advance()) |ch| {
-                    start = self.current;
-                    continue :state ch;
+                if (!found_token) {
+                    continue;
                 } else {
-                    break :state;
+                    break :outer;
                 }
-            } else {
-                break :state;
-            }
-        },
-        '\r' => {
-            if (self.advance()) |ch| continue :state ch else break :state;
-        },
-        '\n', ':' => {
-            if (!found_token) {
-                found_token = true;
-                self.current += 1;
-            }
+            },
+            '\r' => {
+                continue;
+            },
+            '\n', ':' => {
+                if (!found_token) {
+                    found_token = true;
+                    try self.token.append(allocator, ch);
+                    self.reader.toss(1);
+                }
 
-            break :state;
-        },
-        else => {
-            self.start_of_line = false;
-            found_token = true;
-            if (self.advance()) |ch| continue :state ch else break :state;
-        },
+                break :outer;
+            },
+            else => {
+                self.start_of_line = false;
+                found_token = true;
+                try self.token.append(allocator, ch);
+            },
+        }
     }
 
-    const slice = self.stream[start..self.current];
+    const slice = try self.token.toOwnedSlice(allocator);
 
     if (std.mem.eql(u8, slice, "build")) {
         return .init(.build, slice);
@@ -90,7 +114,7 @@ pub fn nextToken(self: *Self) ?Token {
         self.start_of_line = true;
         return .init(.new_line, slice);
     } else if (std.mem.eql(u8, slice, ":")) {
-        return .init(.colon, ":");
+        return .init(.colon, slice);
     } else if (slice.len > 0) {
         return .init(.ident, slice);
     }
@@ -98,17 +122,16 @@ pub fn nextToken(self: *Self) ?Token {
     return null;
 }
 
-fn advance(self: *Self) ?u8 {
-    if (self.current >= self.stream.len) {
-        return null;
-    }
+fn advance(self: *Self) !?u8 {
+    const result = self.reader.takeByte() catch |err| {
+        if (err == error.EndOfStream) {
+            return null;
+        }
 
-    self.current += 1;
+        return err;
+    };
 
-    return if (self.current < self.stream.len)
-        self.stream[self.current]
-    else
-        null;
+    return result;
 }
 
 test "lexer" {
@@ -121,40 +144,45 @@ test "lexer" {
     \\build foo.o: cc foo.c
     ;
 
-    var lexer = Self.initStream(stream);
+    const allocator = std.testing.allocator;
 
-    try expectEqualToken(.init(.ident, "cflags"), lexer.nextToken());
-    try expectEqualToken(.init(.equals, "="), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "-Wall"), lexer.nextToken());
-    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
-    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
-    try expectEqualToken(.init(.rule, "rule"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "cc"), lexer.nextToken());
-    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
-    try expectEqualToken(.init(.indent, ""), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "command"), lexer.nextToken());
-    try expectEqualToken(.init(.equals, "="), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "gcc"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "$cflags"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "-c"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "$in"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "-o"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "$out"), lexer.nextToken());
-    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
-    try expectEqualToken(.init(.new_line, "\n"), lexer.nextToken());
-    try expectEqualToken(.init(.build, "build"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "foo.o"), lexer.nextToken());
-    try expectEqualToken(.init(.colon, ":"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "cc"), lexer.nextToken());
-    try expectEqualToken(.init(.ident, "foo.c"), lexer.nextToken());
+    var lexer = Self.initStream(stream);
+    defer lexer.deinit(allocator);
+
+    try expectEqualToken(allocator, .init(.ident, "cflags"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.equals, "="), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "-Wall"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.rule, "rule"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "cc"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.indent, ""), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "command"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.equals, "="), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "gcc"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "$cflags"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "-c"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "$in"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "-o"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "$out"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.build, "build"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "foo.o"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.colon, ":"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "cc"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "foo.c"), try lexer.nextToken(allocator));
 }
 
 fn expectEqualTokenType(expected: Token.Type, actual: Token.Type) !void {
     try std.testing.expectEqual(expected, actual);
 }
 
-fn expectEqualToken(expected: Token, actual: ?Token) !void {
+fn expectEqualToken(allocator: std.mem.Allocator, expected: Token, actual: ?Token) !void {
     const actual_ = actual orelse unreachable;
+    defer actual_.deinit(allocator);
+
     try expectEqualTokenType(expected.token_type, actual_.token_type);
     try std.testing.expectEqualStrings(expected.data, actual_.data);
 }
