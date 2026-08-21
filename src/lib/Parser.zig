@@ -104,6 +104,40 @@ fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.To
     );
 }
 
+fn parseVariableBlock(self: *Self, allocator: std.mem.Allocator, variables: *std.StringHashMapUnmanaged(Variable),) !void {
+    var last_token: ?Lexer.Token = null;
+    defer if (last_token) |token| token.deinit(allocator);
+
+    var parsing_variable = false;
+    outer: while (try self.lexer.nextToken(allocator)) |token| {
+        switch (token.token_type) {
+            .equals => {
+                const last = last_token orelse return Error.InvalidRule;
+                const variable = try self.parseVariable(allocator, last);
+                try variables.put(allocator, variable.name, variable);
+                // The 'parseVariable' function will eat the '\n' token so need to mark
+                // flag as false.
+                parsing_variable = false;
+            },
+            .indent => {
+                parsing_variable = true;
+            },
+            .new_line => {
+                if (!parsing_variable) {
+                    token.deinit(allocator);
+                    break :outer;
+                } else {
+                    parsing_variable = false;
+                }
+            },
+            else => {},
+        }
+
+        if (last_token) |last| last.deinit(allocator);
+        last_token = token;
+    }
+}
+
 fn parseRule(self: *Self, allocator: std.mem.Allocator) !Rule {
     const name = try self.lexer.nextToken(allocator) orelse return Error.InvalidRule;
     defer name.deinit(allocator);
@@ -116,26 +150,7 @@ fn parseRule(self: *Self, allocator: std.mem.Allocator) !Rule {
     defer new_line.deinit(allocator);
     if (new_line.token_type != .new_line) return Error.InvalidRule;
 
-    var last_token: ?Lexer.Token = null;
-    defer if (last_token) |token| token.deinit(allocator);
-
-    outer: while (try self.lexer.nextToken(allocator)) |token| {
-        switch (token.token_type) {
-            .equals => {
-                const last = last_token orelse return Error.InvalidRule;
-                const variable = try self.parseVariable(allocator, last);
-                try rule.variables.put(allocator, variable.name, variable);
-            },
-            .new_line => {
-                token.deinit(allocator);
-                break :outer;
-            },
-            else => {},
-        }
-
-        if (last_token) |last| last.deinit(allocator);
-        last_token = token;
-    }
+    try self.parseVariableBlock(allocator, &rule.variables);
 
     return rule;
 }
@@ -171,6 +186,8 @@ fn parseBuild(self: *Self, allocator: std.mem.Allocator) !BuildStatement {
         }
     }
 
+    try self.parseVariableBlock(allocator, &build.variables);
+
     return build;
 }
 
@@ -180,8 +197,11 @@ test "parser" {
     \\
     \\rule cc
     \\    command = gcc $cflags -c $in -o $out
+    \\    rulevar = 0
     \\
     \\build foo.o: cc foo.c
+    \\    buildvar1 = true
+    \\    buildvar2 = 5
     ;
 
     const allocator = std.testing.allocator;
@@ -198,16 +218,23 @@ test "parser" {
 
     const rule = parser.rules.get("cc") orelse unreachable;
     try std.testing.expectEqual(1, parser.rules.count());
-    try std.testing.expectEqual(1, rule.variables.count());
+    try std.testing.expectEqual(2, rule.variables.count());
     try std.testing.expectEqualStrings("cc", rule.name);
     try std.testing.expectEqualStrings("command", rule.variables.get("command").?.name);
     try std.testing.expectEqualStrings("gcc $cflags -c $in -o $out", rule.variables.get("command").?.value);
+    try std.testing.expectEqualStrings("rulevar", rule.variables.get("rulevar").?.name);
+    try std.testing.expectEqualStrings("0", rule.variables.get("rulevar").?.value);
 
     const build = parser.builds.items[0];
     try std.testing.expectEqual(1, parser.builds.items.len);
     try std.testing.expectEqual(1, build.outputs.items.len);
     try std.testing.expectEqual(1, build.inputs.items.len);
+    try std.testing.expectEqual(2, build.variables.count());
     try std.testing.expectEqualStrings("cc", build.rule.?);
     try std.testing.expectEqualStrings("foo.o", build.outputs.items[0]);
     try std.testing.expectEqualStrings("foo.c", build.inputs.items[0]);
+    try std.testing.expectEqualStrings("buildvar1", build.variables.get("buildvar1").?.name);
+    try std.testing.expectEqualStrings("true", build.variables.get("buildvar1").?.value);
+    try std.testing.expectEqualStrings("buildvar2", build.variables.get("buildvar2").?.name);
+    try std.testing.expectEqualStrings("5", build.variables.get("buildvar2").?.value);
 }
