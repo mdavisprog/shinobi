@@ -12,20 +12,23 @@ pub const Error = error{
 const Self = @This();
 
 lexer: Lexer,
-variables: std.StringHashMapUnmanaged(Variable),
-rules: std.StringHashMapUnmanaged(Rule),
-builds: std.ArrayListUnmanaged(BuildStatement),
+variables: std.StringHashMapUnmanaged(Variable) = .empty,
+rules: std.StringHashMapUnmanaged(Rule) = .empty,
+builds: std.ArrayListUnmanaged(BuildStatement) = .empty,
 
-pub fn init(stream: []const u8) Self {
+pub fn initStream(stream: []const u8) Self {
     return .{
         .lexer = .initStream(stream),
-        .variables = .empty,
-        .rules = .empty,
-        .builds = .empty,
     };
 }
 
-pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+pub fn initFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Self {
+    return .{
+        .lexer = try .initFile(allocator, io, path),
+    };
+}
+
+pub fn deinit(self: *Self, allocator: std.mem.Allocator, io: std.Io) void {
     {
         var it = self.variables.valueIterator();
         while (it.next()) |variable| {
@@ -47,7 +50,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     }
     self.builds.deinit(allocator);
 
-    self.lexer.deinit(allocator);
+    self.lexer.deinit(allocator, io);
 }
 
 pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
@@ -182,9 +185,10 @@ test "parser" {
     ;
 
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
-    var parser = Self.init(stream);
-    defer parser.deinit(allocator);
+    var parser = Self.initStream(stream);
+    defer parser.deinit(allocator, io);
 
     try parser.begin(allocator);
 

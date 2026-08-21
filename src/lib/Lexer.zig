@@ -24,29 +24,99 @@ pub const Token = struct {
     }
 };
 
+const Source = union(enum) {
+    stream: std.Io.Reader,
+    file: struct {
+        handle: std.Io.File,
+        buffer: []u8,
+        reader: std.Io.File.Reader,
+    },
+
+    fn initStream(stream: []const u8) Source {
+        return .{ .stream = .fixed(stream) };
+    }
+
+    fn initFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Source {
+        const handle = if (std.fs.path.isAbsolute(path))
+            try std.Io.Dir.openFileAbsolute(io, path, .{})
+        else
+            try std.Io.Dir.cwd().openFile(io, path, .{});
+
+        const buffer = try allocator.alloc(u8, 1024);
+        const reader = handle.reader(io, buffer);
+
+        return .{
+            .file = .{
+                .handle = handle,
+                .buffer = buffer,
+                .reader = reader,
+            },
+        };
+    }
+
+    fn deinit(self: *Source, allocator: std.mem.Allocator, io: std.Io) void {
+        switch (self.*) {
+            .stream => {},
+            .file => |file| {
+                file.handle.close(io);
+                allocator.free(file.buffer);
+            },
+        }
+    }
+
+    fn peekByte(self: *Source) !u8 {
+        switch (self.*) {
+            .stream => |*reader| {
+                return reader.peekByte();
+            },
+            .file => |*file| {
+                return file.reader.interface.peekByte();
+            }
+        }
+    }
+
+    fn toss(self: *Source, n: usize) void {
+        switch (self.*) {
+            .stream => |*reader| {
+                reader.toss(n);
+            },
+            .file => |*file| {
+                file.reader.interface.toss(n);
+            },
+        }
+    }
+};
+
 /// Struct to analyze a buffer stream to be parsed into tokens.
 const Self = @This();
 
-reader: std.Io.Reader,
+source: Source,
 token: std.ArrayListUnmanaged(u8) = .empty,
 start_of_line: bool = true,
 
 pub fn initStream(stream: []const u8) Self {
     return .{
-        .reader = .fixed(stream),
+        .source = .initStream(stream),
     };
 }
 
-pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+pub fn initFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Self {
+    return .{
+        .source = try .initFile(allocator, io, path),
+    };
+}
+
+pub fn deinit(self: *Self, allocator: std.mem.Allocator, io: std.Io) void {
     self.token.deinit(allocator);
+    self.source.deinit(allocator, io);
 }
 
 pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
     self.token.clearRetainingCapacity();
 
     var found_token = false;
-    outer: while (true) : (self.reader.toss(1)) {
-        const ch = self.reader.peekByte() catch |err| {
+    outer: while (true) : (self.source.toss(1)) {
+        const ch = self.source.peekByte() catch |err| {
             if (err == error.EndOfStream) {
                 break :outer;
             }
@@ -60,7 +130,7 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
                 if (self.start_of_line) {
                     self.start_of_line = false;
                     while (true) {
-                        const space = self.reader.peekByte() catch |err| {
+                        const space = self.source.peekByte() catch |err| {
                             if (err == error.EndOfStream) {
                                 break;
                             }
@@ -72,7 +142,7 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
                             return .init(.indent, "");
                         }
 
-                        self.reader.toss(1);
+                        self.source.toss(1);
                     }
                 }
 
@@ -89,7 +159,7 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
                 if (!found_token) {
                     found_token = true;
                     try self.token.append(allocator, ch);
-                    self.reader.toss(1);
+                    self.source.toss(1);
                 }
 
                 break :outer;
@@ -122,18 +192,6 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
     return null;
 }
 
-fn advance(self: *Self) !?u8 {
-    const result = self.reader.takeByte() catch |err| {
-        if (err == error.EndOfStream) {
-            return null;
-        }
-
-        return err;
-    };
-
-    return result;
-}
-
 test "lexer" {
     const stream = 
     \\cflags = -Wall
@@ -145,9 +203,10 @@ test "lexer" {
     ;
 
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var lexer = Self.initStream(stream);
-    defer lexer.deinit(allocator);
+    defer lexer.deinit(allocator, io);
 
     try expectEqualToken(allocator, .init(.ident, "cflags"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.equals, "="), try lexer.nextToken(allocator));
