@@ -115,6 +115,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator, io: std.Io) void {
 pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
     self.token.clearRetainingCapacity();
 
+    var is_escaped = false;
     var found_token = false;
     outer: while (true) : (self.source.toss(1)) {
         const ch = self.source.peekByte() catch |err| {
@@ -127,6 +128,12 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
 
         switch (ch) {
             ' ', '\t' => {
+                if (is_escaped) {
+                    is_escaped = false;
+                    try self.token.append(allocator, ch);
+                    continue;
+                }
+
                 // This is an indentation
                 if (self.start_of_line) {
                     self.start_of_line = false;
@@ -157,13 +164,21 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
                 continue;
             },
             '\n', ':' => {
-                if (!found_token) {
-                    found_token = true;
-                    try self.token.append(allocator, ch);
-                    self.source.toss(1);
-                }
+                if (is_escaped) {
+                    is_escaped = false;
 
-                break :outer;
+                    if (ch == ':') {
+                        try self.token.append(allocator, ch);
+                    }
+                } else {
+                    if (!found_token) {
+                        found_token = true;
+                        try self.token.append(allocator, ch);
+                        self.source.toss(1);
+                    }
+
+                    break :outer;
+                }
             },
             '#' => {
                 try self.token.append(allocator, ch);
@@ -189,9 +204,16 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
                     }
                 }
             },
+            '$' => {
+                self.start_of_line = false;
+                found_token = true;
+                is_escaped = true;
+                try self.token.append(allocator, ch);
+            },
             else => {
                 self.start_of_line = false;
                 found_token = true;
+                is_escaped = false;
                 try self.token.append(allocator, ch);
             },
         }
@@ -228,6 +250,8 @@ test "lexer" {
     \\    command = gcc $cflags -c $in -o $out
     \\
     \\build foo.o: cc foo.c
+    \\
+    \\build bar.o: cc C$:\Some$ Folder\bar.c
     ;
 
     const allocator = std.testing.allocator;
@@ -262,6 +286,13 @@ test "lexer" {
     try expectEqualToken(allocator, .init(.colon, ":"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.ident, "cc"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.ident, "foo.c"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.build, "build"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "bar.o"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.colon, ":"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "cc"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "C$:\\Some$ Folder\\bar.c"), try lexer.nextToken(allocator));
 }
 
 fn expectEqualTokenType(expected: Token.Type, actual: Token.Type) !void {
