@@ -80,6 +80,55 @@ pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
     }
 }
 
+pub fn printSummary(self: Self) void {
+    {
+        std.log.info("Variables: {}", .{self.variables.count()});
+
+        var it = self.variables.valueIterator();
+        while (it.next()) |variable| {
+            std.log.info("   {s} = {s}", .{ variable.name, variable.value });
+        }
+    }
+
+    {
+        std.log.info("Rules: {}", .{self.rules.count()});
+        var it = self.rules.valueIterator();
+        while (it.next()) |rule| {
+            std.log.info("   {s} has {} variables", .{ rule.name, rule.variables.count() });
+
+            var variables = rule.variables.valueIterator();
+            while (variables.next()) |variable| {
+                std.log.info("      {s} = {s}", .{ variable.name, variable.value });
+            }
+        }
+    }
+
+    {
+        std.log.info("Builds: {}", .{self.builds.items.len});
+        for (self.builds.items) |build| {
+            std.log.info("   inputs: {}", .{build.inputs.items.len});
+            for (build.inputs.items) |input| {
+                std.log.info("      {s}", .{input});
+            }
+
+            std.log.info("   outputs: {}", .{build.outputs.items.len});
+            for (build.outputs.items) |output| {
+                std.log.info("      {s}", .{output});
+            }
+
+            if (build.rule) |rule| {
+                std.log.info("   Rule: {s}", .{rule});
+            }
+
+            std.log.info("   variables: {}", .{build.variables.count()});
+            var variables = build.variables.valueIterator();
+            while (variables.next()) |variable| {
+                std.log.info("      {s} = {s}", .{ variable.name, variable.value });
+            }
+        }
+    }
+}
+
 fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.Token) !Variable {
     var value = std.ArrayListUnmanaged(u8).empty;
 
