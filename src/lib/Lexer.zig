@@ -72,7 +72,7 @@ const Source = union(enum) {
             },
             .file => |*file| {
                 return file.reader.interface.peekByte();
-            }
+            },
         }
     }
 
@@ -242,16 +242,16 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
 }
 
 test "lexer" {
-    const stream = 
-    \\cflags = -Wall
-    \\# not_a_var = true
-    \\
-    \\rule cc
-    \\    command = gcc $cflags -c $in -o $out
-    \\
-    \\build foo.o: cc foo.c
-    \\
-    \\build bar.o: cc C$:\Some$ Folder\bar.c
+    const stream =
+        \\cflags = -Wall
+        \\# not_a_var = true
+        \\
+        \\rule cc
+        \\    command = gcc $cflags -c $in -o $out
+        \\
+        \\build foo.o: cc foo.c
+        \\
+        \\build bar.o: cc C$:\Some$ Folder\bar.c
     ;
 
     const allocator = std.testing.allocator;

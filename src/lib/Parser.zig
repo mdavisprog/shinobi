@@ -153,7 +153,11 @@ fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.To
     );
 }
 
-fn parseVariableBlock(self: *Self, allocator: std.mem.Allocator, variables: *std.StringHashMapUnmanaged(Variable),) !void {
+fn parseVariableBlock(
+    self: *Self,
+    allocator: std.mem.Allocator,
+    variables: *std.StringHashMapUnmanaged(Variable),
+) !void {
     var last_token: ?Lexer.Token = null;
     defer if (last_token) |token| token.deinit(allocator);
 
@@ -222,7 +226,9 @@ fn parseBuild(self: *Self, allocator: std.mem.Allocator) !BuildStatement {
                         build.rule = try allocator.dupe(u8, token.data);
                         parsing_rule = false;
                     } else {
-                        try build.inputs.append(allocator, try allocator.dupe(u8, token.data));
+                        const input = try std.mem.replaceOwned(u8, allocator, token.data, "$", "");
+                        std.mem.replaceScalar(u8, input, '\\', '/');
+                        try build.inputs.append(allocator, input);
                     }
                 }
             },
@@ -241,16 +247,18 @@ fn parseBuild(self: *Self, allocator: std.mem.Allocator) !BuildStatement {
 }
 
 test "parser" {
-    const stream = 
-    \\cflags = -Wall
-    \\
-    \\rule cc
-    \\    command = gcc $cflags -c $in -o $out
-    \\    rulevar = 0
-    \\
-    \\build foo.o: cc foo.c
-    \\    buildvar1 = true
-    \\    buildvar2 = 5
+    const stream =
+        \\cflags = -Wall
+        \\
+        \\rule cc
+        \\    command = gcc $cflags -c $in -o $out
+        \\    rulevar = 0
+        \\
+        \\build foo.o: cc foo.c
+        \\    buildvar1 = true
+        \\    buildvar2 = 5
+        \\
+        \\build bar.o: cc C$:\Some$ Folder\bar.c
     ;
 
     const allocator = std.testing.allocator;
@@ -274,16 +282,23 @@ test "parser" {
     try std.testing.expectEqualStrings("rulevar", rule.variables.get("rulevar").?.name);
     try std.testing.expectEqualStrings("0", rule.variables.get("rulevar").?.value);
 
-    const build = parser.builds.items[0];
-    try std.testing.expectEqual(1, parser.builds.items.len);
-    try std.testing.expectEqual(1, build.outputs.items.len);
-    try std.testing.expectEqual(1, build.inputs.items.len);
-    try std.testing.expectEqual(2, build.variables.count());
-    try std.testing.expectEqualStrings("cc", build.rule.?);
-    try std.testing.expectEqualStrings("foo.o", build.outputs.items[0]);
-    try std.testing.expectEqualStrings("foo.c", build.inputs.items[0]);
-    try std.testing.expectEqualStrings("buildvar1", build.variables.get("buildvar1").?.name);
-    try std.testing.expectEqualStrings("true", build.variables.get("buildvar1").?.value);
-    try std.testing.expectEqualStrings("buildvar2", build.variables.get("buildvar2").?.name);
-    try std.testing.expectEqualStrings("5", build.variables.get("buildvar2").?.value);
+    const build1 = parser.builds.items[0];
+    try std.testing.expectEqual(2, parser.builds.items.len);
+    try std.testing.expectEqual(1, build1.outputs.items.len);
+    try std.testing.expectEqual(1, build1.inputs.items.len);
+    try std.testing.expectEqual(2, build1.variables.count());
+    try std.testing.expectEqualStrings("cc", build1.rule.?);
+    try std.testing.expectEqualStrings("foo.o", build1.outputs.items[0]);
+    try std.testing.expectEqualStrings("foo.c", build1.inputs.items[0]);
+    try std.testing.expectEqualStrings("buildvar1", build1.variables.get("buildvar1").?.name);
+    try std.testing.expectEqualStrings("true", build1.variables.get("buildvar1").?.value);
+    try std.testing.expectEqualStrings("buildvar2", build1.variables.get("buildvar2").?.name);
+    try std.testing.expectEqualStrings("5", build1.variables.get("buildvar2").?.value);
+
+    const build2 = parser.builds.items[1];
+    try std.testing.expectEqual(1, build2.outputs.items.len);
+    try std.testing.expectEqual(1, build2.inputs.items.len);
+    try std.testing.expectEqual(0, build2.variables.count());
+    try std.testing.expectEqualStrings("bar.o", build2.outputs.items[0]);
+    try std.testing.expectEqualStrings("C:/Some Folder/bar.c", build2.inputs.items[0]);
 }
