@@ -132,16 +132,24 @@ pub fn printSummary(self: Self) void {
 fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.Token) !Variable {
     var value = std.ArrayListUnmanaged(u8).empty;
 
+    var single_token = false;
     while (try self.lexer.nextToken(allocator)) |token| {
         defer token.deinit(allocator);
 
         switch (token.token_type) {
             .ident => {
-                if (value.items.len > 0) {
+                if (value.items.len > 0 and !single_token) {
                     try value.append(allocator, ' ');
                 }
 
                 try value.appendSlice(allocator, token.data);
+                single_token = false;
+            },
+            // ':' token is not escaped in variables. Add these tokens and mark
+            // identifier as a single token.
+            .colon => {
+                try value.appendSlice(allocator, token.data);
+                single_token = true;
             },
             else => break,
         }
