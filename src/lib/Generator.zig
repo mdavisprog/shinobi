@@ -78,12 +78,19 @@ fn writeInputs(writer: *std.Io.Writer, builds: std.ArrayListUnmanaged(BuildState
     for (builds.items) |build| {
         for (build.inputs.items) |input| {
             const ext = std.fs.path.extension(input);
-            if (std.mem.eql(u8, ext, ".c") or
-                std.mem.eql(u8, ext, ".cpp"))
-            {
-                try writer.print("            \"{s}\",\n", .{input});
-                try writer.flush();
+            if (!(std.mem.eql(u8, ext, ".c") or
+                std.mem.eql(u8, ext, ".cpp"))) {
+                continue;
             }
+
+            const stem = std.fs.path.stem(input);
+            if (std.mem.eql(u8, stem, "CMakeCCompilerABI") or
+                std.mem.eql(u8, stem, "CMakeCXXCompilerABI")) {
+                continue;
+            }
+
+            try writer.print("            \"{s}\",\n", .{input});
+            try writer.flush();
         }
     }
 
