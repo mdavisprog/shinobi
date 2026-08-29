@@ -11,6 +11,7 @@ pub const Token = struct {
         indent,
         colon,
         comment,
+        include,
     };
 
     token_type: Type,
@@ -232,6 +233,8 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
         return .init(.new_line, slice);
     } else if (std.mem.eql(u8, slice, ":")) {
         return .init(.colon, slice);
+    } else if (std.mem.eql(u8, slice, "include")) {
+        return .init(.include, slice);
     } else if (std.mem.startsWith(u8, slice, "#")) {
         return .init(.comment, slice);
     } else if (slice.len > 0) {
@@ -245,6 +248,8 @@ test "lexer" {
     const stream =
         \\cflags = -Wall
         \\# not_a_var = true
+        \\
+        \\include Dir/rules.ninja
         \\
         \\rule cc
         \\    command = gcc $cflags -c $in -o $out
@@ -265,6 +270,10 @@ test "lexer" {
     try expectEqualToken(allocator, .init(.ident, "-Wall"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.comment, "# not_a_var = true"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.include, "include"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "Dir/rules.ninja"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.rule, "rule"), try lexer.nextToken(allocator));
