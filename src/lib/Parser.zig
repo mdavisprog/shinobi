@@ -6,6 +6,7 @@ const Variable = @import("Variable.zig");
 
 pub const Error = error{
     InvalidRule,
+    InvalidInclude,
 };
 
 /// Parses a stream or file into tokens so they can be destructured to create a 'build.zig' file.
@@ -53,7 +54,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator, io: std.Io) void {
     self.lexer.deinit(allocator, io);
 }
 
-pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
+pub fn begin(self: *Self, allocator: std.mem.Allocator, io: std.Io) anyerror!void {
     var last_token: ?Lexer.Token = null;
     defer if (last_token) |token| token.deinit(allocator);
 
@@ -71,6 +72,9 @@ pub fn begin(self: *Self, allocator: std.mem.Allocator) !void {
             .build => {
                 const build = try self.parseBuild(allocator);
                 try self.builds.append(allocator, build);
+            },
+            .include => {
+                try self.parseInclude(allocator, io);
             },
             else => {},
         }
@@ -254,6 +258,54 @@ fn parseBuild(self: *Self, allocator: std.mem.Allocator) !BuildStatement {
     return build;
 }
 
+fn parseInclude(self: *Self, allocator: std.mem.Allocator, io: std.Io) anyerror!void {
+    const path_token = try self.lexer.nextToken(allocator) orelse return Error.InvalidInclude;
+    defer path_token.deinit(allocator);
+
+    if (self.lexer.getPath()) |path| {
+        if (std.fs.path.dirname(path)) |dir| {
+            const include_path = try std.fs.path.join(allocator, &.{ dir, path_token.data });
+            defer allocator.free(include_path);
+
+            var parser = try Self.initFile(allocator, io, include_path);
+
+            try parser.begin(allocator, io);
+            try self.move(allocator, parser);
+
+            // We do not want to free the allocated elements as they have been moved.
+            // Just free the containers.
+            parser.variables.deinit(allocator);
+            parser.rules.deinit(allocator);
+            parser.builds.deinit(allocator);
+            parser.lexer.deinit(allocator, io);
+        }
+    } else {
+    }
+}
+
+fn move(self: *Self, allocator: std.mem.Allocator, other: Self) !void {
+    // Move variables
+    {
+        var it = other.variables.valueIterator();
+        while (it.next()) |variable| {
+            try self.variables.put(allocator, variable.name, variable.*);
+        }
+    }
+
+    // Move rules
+    {
+        var it = other.rules.valueIterator();
+        while (it.next()) |rule| {
+            try self.rules.put(allocator, rule.name, rule.*);
+        }
+    }
+
+    // Move builds
+    {
+        try self.builds.appendSlice(allocator, other.builds.items);
+    }
+}
+
 test "parser" {
     const stream =
         \\cflags = -Wall
@@ -275,7 +327,7 @@ test "parser" {
     var parser = Self.initStream(stream);
     defer parser.deinit(allocator, io);
 
-    try parser.begin(allocator);
+    try parser.begin(allocator, io);
 
     try std.testing.expectEqual(1, parser.variables.count());
     try std.testing.expectEqualStrings("cflags", parser.variables.get("cflags").?.name);

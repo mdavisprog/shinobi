@@ -26,12 +26,14 @@ pub const Token = struct {
     }
 };
 
+/// Stores the buffer from where the lexer pulls bytes from.
 const Source = union(enum) {
     stream: std.Io.Reader,
     file: struct {
         handle: std.Io.File,
         buffer: []u8,
         reader: std.Io.File.Reader,
+        path: []const u8,
     },
 
     fn initStream(stream: []const u8) Source {
@@ -52,6 +54,7 @@ const Source = union(enum) {
                 .handle = handle,
                 .buffer = buffer,
                 .reader = reader,
+                .path = try allocator.dupe(u8, path),
             },
         };
     }
@@ -62,6 +65,7 @@ const Source = union(enum) {
             .file => |file| {
                 file.handle.close(io);
                 allocator.free(file.buffer);
+                allocator.free(file.path);
             },
         }
     }
@@ -242,6 +246,13 @@ pub fn nextToken(self: *Self, allocator: std.mem.Allocator) !?Token {
     }
 
     return null;
+}
+
+pub fn getPath(self: Self) ?[]const u8 {
+    return switch (self.source) {
+        .stream => null,
+        .file => |file| file.path,
+    };
 }
 
 test "lexer" {

@@ -16,7 +16,7 @@ pub fn generate(
     var parser = try Parser.initFile(allocator, io, path);
     defer parser.deinit(allocator, io);
 
-    try parser.begin(allocator);
+    try parser.begin(allocator, io);
 
     std.log.info("Generating 'build.zig' file", .{});
 
