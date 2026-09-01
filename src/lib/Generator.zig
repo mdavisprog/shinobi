@@ -2,6 +2,11 @@ const BuildStatement = @import("BuildStatement.zig");
 const Parser = @import("Parser.zig");
 const std = @import("std");
 
+/// List of options to control generator.
+pub const Options = struct {
+    print_summary: bool = false,
+};
+
 /// Manages parsing a 'ninja' file and emitting a 'build.zig' file.
 const Self = @This();
 
@@ -10,6 +15,7 @@ pub fn generate(
     allocator: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
+    options: Options,
 ) !void {
     _ = self;
 
@@ -42,6 +48,10 @@ pub fn generate(
     try writeCreateModule(&writer.interface);
     try writeInputs(&writer.interface, parser.builds);
     try writeFooter(&writer.interface);
+
+    if (options.print_summary) {
+        parser.printSummary();
+    }
 }
 
 fn writeHeader(writer: *std.Io.Writer) !void {

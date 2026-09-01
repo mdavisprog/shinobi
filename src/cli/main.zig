@@ -9,10 +9,16 @@ pub fn main(init: std.process.Init) !void {
     defer args.deinit();
 
     var maybe_path: ?[]const u8 = null;
+    var options = lib.Generator.Options{};
+
     var index: usize = 0;
     while (args.next()) |arg| : (index += 1) {
         if (index == 1) {
             maybe_path = arg;
+        }
+
+        if (std.mem.eql(u8, arg, "--print-summary")) {
+            options.print_summary = true;
         }
     }
 
@@ -25,5 +31,5 @@ pub fn main(init: std.process.Init) !void {
 
     std.log.info("Attempting to parse ninja file '{s}'", .{path});
 
-    try generator.generate(allocator, io, path);
+    try generator.generate(allocator, io, path, options);
 }
