@@ -4,6 +4,7 @@ pub const Parser = @import("Parser.zig");
 const std = @import("std");
 
 test "lib" {
+    _ = @import("Generator.zig");
     _ = @import("Lexer.zig");
     _ = @import("Parser.zig");
 }
