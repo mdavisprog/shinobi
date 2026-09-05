@@ -80,7 +80,7 @@ pub fn generate(
     try writeHeader(&writer.interface);
     try writeBuildVars(&writer.interface);
     try writeCreateModule(&writer.interface);
-    try writeUnits(&writer.interface, units);
+    try writeUnits(allocator, &writer.interface, units, dir);
     try writeFooter(&writer.interface);
 
     if (options.print_summary) {
@@ -191,14 +191,24 @@ fn writeCreateModule(writer: *std.Io.Writer) !void {
     try writer.flush();
 }
 
-fn writeUnits(writer: *std.Io.Writer, units: Units) !void {
+fn writeUnits(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    units: Units,
+    build_dir: []const u8,
+) !void {
     for (units.collection.items) |unit| {
         try writer.print("    module.addCSourceFiles(.{{\n", .{});
         try writer.print("        .files = &.{{\n", .{});
         try writer.flush();
 
         for (unit.files.items) |file| {
-            try writer.print("            \"{s}\",\n", .{file});
+            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
+            defer allocator.free(relative);
+
+            std.mem.replaceScalar(u8, relative, '\\', '/');
+
+            try writer.print("            \"{s}\",\n", .{relative});
             try writer.flush();
         }
 
