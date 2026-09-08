@@ -141,7 +141,7 @@ fn parseVariable(self: *Self, allocator: std.mem.Allocator, name_token: Lexer.To
         defer token.deinit(allocator);
 
         switch (token.token_type) {
-            .ident => {
+            .ident, .build => {
                 if (value.items.len > 0 and !single_token) {
                     try value.append(allocator, ' ');
                 }
