@@ -1,3 +1,4 @@
+const Artifact = @import("Artifact.zig");
 const BuildStatement = @import("BuildStatement.zig");
 const Parser = @import("Parser.zig");
 const Rule = @import("Rule.zig");
@@ -12,30 +13,6 @@ pub const Error = error{
 /// List of options to control generator.
 pub const Options = struct {
     print_summary: bool = false,
-};
-
-/// Represents a compilation unit which consists of all of the files needed
-/// and the associated flags for compiling these files.
-const Unit = struct {
-    files: std.ArrayListUnmanaged([]const u8) = .empty,
-    flags: std.StringHashMapUnmanaged(void) = .empty,
-
-    fn deinit(self: *Unit, allocator: std.mem.Allocator) void {
-        self.files.deinit(allocator);
-        self.flags.deinit(allocator);
-    }
-};
-
-/// A collection of compilation units.
-const Units = struct {
-    collection: std.ArrayListUnmanaged(Unit) = .empty,
-
-    fn deinit(self: *Units, allocator: std.mem.Allocator) void {
-        for (self.collection.items) |*unit| {
-            unit.deinit(allocator);
-        }
-        self.collection.deinit(allocator);
-    }
 };
 
 /// Manages parsing a 'ninja' file and emitting a 'build.zig' file.
@@ -65,8 +42,8 @@ pub fn generate(
     const output_path = try std.fs.path.join(allocator, &.{ dir, "build.zig" });
     defer allocator.free(output_path);
 
-    var units = try gatherUnits(allocator, parser);
-    defer units.deinit(allocator);
+    var artifacts = try gatherArtifacts(allocator, parser);
+    defer artifacts.deinit(allocator);
 
     const file = if (std.fs.path.isAbsolute(output_path))
         try std.Io.Dir.createFileAbsolute(io, output_path, .{})
@@ -79,8 +56,7 @@ pub fn generate(
 
     try writeHeader(&writer.interface);
     try writeBuildVars(&writer.interface);
-    try writeCreateModule(&writer.interface);
-    try writeUnits(allocator, &writer.interface, units, dir);
+    try writeArtifacts(allocator, &writer.interface, artifacts, dir);
     try writeFooter(&writer.interface);
 
     if (options.print_summary) {
@@ -88,47 +64,80 @@ pub fn generate(
     }
 }
 
-fn gatherUnits(allocator: std.mem.Allocator, parser: Parser) !Units {
-    var units = Units{};
+fn gatherArtifacts(allocator: std.mem.Allocator, parser: Parser) !Artifact.Collection {
+    var artifacts = Artifact.Collection{};
 
     for (parser.builds.items) |build| {
-        const rule_name = build.rule orelse continue;
-        const rule = parser.rules.get(rule_name) orelse continue;
+        var artifact = Artifact{};
+        artifact.flags = try getFlags(allocator, build, parser);
 
-        var files = std.ArrayListUnmanaged([]const u8).empty;
-        for (build.inputs.items) |input| {
-            if (!isValidFile(input)) {
-                continue;
+        var is_compile_command = false;
+        var it = artifact.flags.keyIterator();
+        while (it.next()) |flag| {
+            if (std.mem.eql(u8, flag.*, "-c")) {
+                is_compile_command = true;
+                break;
             }
-
-            try files.append(allocator, input);
         }
 
-        if (files.items.len == 0) {
-            files.deinit(allocator);
+        artifact.output_type = blk: {
+            if (is_compile_command) {
+                break :blk .object;
+            }
+
+            for (build.outputs.items) |output| {
+                const ext = std.fs.path.extension(output);
+                if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
+                    break :blk .library;
+                }
+            }
+
+            break :blk .executable;
+        };
+
+        for (build.inputs.items) |input| {
+            switch (artifact.output_type) {
+                .object => {
+                    if (isValidSourceFile(input)) {
+                        try artifact.inputs.append(allocator, input);
+                    }
+                },
+                else => {
+                    try artifact.inputs.append(allocator, input);
+                },
+            }
+        }
+
+        if (artifact.inputs.items.len == 0) {
+            artifact.deinit(allocator);
             continue;
         }
 
-        const flags = try getFlags(allocator, rule, build, parser);
+        for (build.outputs.items) |output| {
+            try artifact.outputs.append(allocator, output);
+        }
 
-        try units.collection.append(allocator, .{
-            .files = files,
-            .flags = flags,
-        });
+        it = artifact.flags.keyIterator();
+        while (it.next()) |flag| {
+            if (!isValidFlag(flag.*)) {
+                _ = artifact.flags.remove(flag.*);
+            }
+        }
+
+        try artifacts.add(allocator, artifact);
     }
 
-    return units;
+    return artifacts;
 }
 
 fn getFlags(
     allocator: std.mem.Allocator,
-    rule: Rule,
     build: BuildStatement,
     parser: Parser,
 ) !std.StringHashMapUnmanaged(void) {
     var flags = std.StringHashMapUnmanaged(void).empty;
 
-    const command = rule.variables.get("command") orelse return Error.InvalidRule;
+    const command = getVariable("command", build, parser) orelse return flags;
 
     try parseFlags(allocator, command.value, &flags);
 
@@ -137,15 +146,8 @@ fn getFlags(
         if (std.mem.startsWith(u8, token, "$")) {
             const name = token[1..];
 
-            const variable: ?Variable = blk: {
-                if (build.variables.get(name)) |v| break :blk v;
-                if (rule.variables.get(name)) |v| break :blk v;
-                if (parser.variables.get(name)) |v| break :blk v;
-                break :blk null;
-            };
-
-            const v = variable orelse continue;
-            try parseFlags(allocator, v.value, &flags);
+            const variable = getVariable(name, build, parser) orelse continue;
+            try parseFlags(allocator, variable.value, &flags);
         }
     }
 
@@ -156,11 +158,10 @@ fn parseFlags(
     allocator: std.mem.Allocator,
     stream: []const u8,
     flags: *std.StringHashMapUnmanaged(void),
+    
 ) !void {
     var tokens = std.mem.tokenizeAny(u8, stream, " ");
     while (tokens.next()) |token| {
-        if (!isValidFlag(token)) continue;
-
         try flags.put(allocator, token, {});
     }
 }
@@ -183,51 +184,63 @@ fn writeBuildVars(writer: *std.Io.Writer) !void {
     try writer.flush();
 }
 
-fn writeCreateModule(writer: *std.Io.Writer) !void {
-    try writer.print("    const module = b.createModule(.{{\n", .{});
+fn writeAddModule(writer: *std.Io.Writer, name: []const u8) !void {
+    try writer.print("    const {s} = b.addModule(\"{s}\", .{{\n", .{ name, name });
     try writer.print("        .target = target,\n", .{});
     try writer.print("        .optimize = optimize,\n", .{});
     try writer.print("    }});\n", .{});
     try writer.flush();
 }
 
-fn writeUnits(
+fn writeArtifacts(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
-    units: Units,
+    artifacts: Artifact.Collection,
     build_dir: []const u8,
 ) !void {
-    for (units.collection.items) |unit| {
-        try writer.print("    module.addCSourceFiles(.{{\n", .{});
-        try writer.print("        .files = &.{{\n", .{});
-        try writer.flush();
+    for (artifacts.list.items) |artifact| {
+        if (artifact.output_type != .library) continue;
 
-        for (unit.files.items) |file| {
-            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
-            defer allocator.free(relative);
+        const output_path = artifact.getOutputName() orelse "module";
+        const name = std.fs.path.stem(output_path);
+        try writeAddModule(writer, name);
 
-            std.mem.replaceScalar(u8, relative, '\\', '/');
+        for (artifact.inputs.items) |input| {
+            const input_artifact = artifacts.getByOutput(input) orelse continue;
+            if (input_artifact.inputs.items.len == 0) continue;
 
-            try writer.print("            \"{s}\",\n", .{relative});
+            try writer.print("    {s}.addCSourceFiles(.{{\n", .{name});
+            try writer.print("        .files = &.{{\n", .{});
+            try writer.flush();
+
+            for (input_artifact.inputs.items) |file| {
+                const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
+                defer allocator.free(relative);
+
+                std.mem.replaceScalar(u8, relative, '\\', '/');
+
+                try writer.print("            \"{s}\",\n", .{relative});
+                try writer.flush();
+            }
+
+            try writer.print("        }},\n", .{});
+            try writer.print("        .flags = &.{{\n", .{});
+
+            var it = input_artifact.flags.keyIterator();
+            while (it.next()) |flag| {
+                try writer.print("            \"{s}\",\n", .{flag.*});
+                try writer.flush();
+            }
+
+            try writer.print("        }},\n", .{});
+            try writer.print("    }});\n", .{});
             try writer.flush();
         }
 
-        try writer.print("        }},\n", .{});
-        try writer.print("        .flags = &.{{\n", .{});
-
-        var it = unit.flags.keyIterator();
-        while (it.next()) |flag| {
-            try writer.print("            \"{s}\",\n", .{flag.*});
-            try writer.flush();
-        }
-
-        try writer.print("        }},\n", .{});
-        try writer.print("    }});\n", .{});
-        try writer.flush();
     }
 }
 
-fn isValidFile(file: []const u8) bool {
+fn isValidSourceFile(file: []const u8) bool {
     const stem = std.fs.path.stem(file);
     if (std.mem.eql(u8, stem, "CMakeCCompilerABI") or
         std.mem.eql(u8, stem, "CMakeCXXCompilerABI"))
@@ -253,6 +266,24 @@ fn isValidFlag(flag: []const u8) bool {
     if (std.mem.eql(u8, flag, "-o")) return false;
 
     return true;
+}
+
+fn getVariable(name: []const u8, build: BuildStatement, parser: Parser) ?Variable {
+    if (build.variables.get(name)) |variable| {
+        return variable;
+    }
+
+    const rule_name = build.rule orelse return null;
+    const rule = parser.rules.get(rule_name) orelse return null;
+    if (rule.variables.get(name)) |variable| {
+        return variable;
+    }
+
+    if (parser.variables.get(name)) |variable| {
+        return variable;
+    }
+
+    return null;
 }
 
 test "generator gather files and flags" {
@@ -283,28 +314,29 @@ test "generator gather files and flags" {
 
     try parser.begin(allocator, io);
 
-    var units = try gatherUnits(allocator, parser);
-    defer units.deinit(allocator);
+    var artifacts = try gatherArtifacts(allocator, parser);
+    defer artifacts.deinit(allocator);
 
-    try std.testing.expectEqual(3, units.collection.items.len);
+    try std.testing.expectEqual(3, artifacts.list.items.len);
 
-    const unit1 = units.collection.items[0];
-    try std.testing.expectEqual(1, unit1.files.items.len);
-    try std.testing.expectEqualStrings("foo.c", unit1.files.items[0]);
-    try std.testing.expectEqual(1, unit1.flags.count());
-    try std.testing.expect(unit1.flags.contains("-Werror"));
 
-    const unit2 = units.collection.items[1];
-    try std.testing.expectEqual(2, unit2.files.items.len);
-    try std.testing.expectEqualStrings("bar1.c", unit2.files.items[0]);
-    try std.testing.expectEqualStrings("bar2.c", unit2.files.items[1]);
-    try std.testing.expectEqual(1, unit2.flags.count());
-    try std.testing.expect(unit2.flags.contains("-Wall"));
+    const artifact1 = artifacts.list.items[0];
+    try std.testing.expectEqual(1, artifact1.inputs.items.len);
+    try std.testing.expectEqualStrings("foo.c", artifact1.inputs.items[0]);
+    try std.testing.expectEqual(1, artifact1.flags.count());
+    try std.testing.expect(artifact1.flags.contains("-Werror"));
 
-    const unit3 = units.collection.items[2];
-    try std.testing.expectEqual(1, unit3.files.items.len);
-    try std.testing.expectEqualStrings("test.c", unit3.files.items[0]);
-    try std.testing.expectEqual(2, unit3.flags.count());
-    try std.testing.expect(unit3.flags.contains("-Werror"));
-    try std.testing.expect(unit3.flags.contains("-Wformat"));
+    const artifact2 = artifacts.list.items[1];
+    try std.testing.expectEqual(2, artifact2.inputs.items.len);
+    try std.testing.expectEqualStrings("bar1.c", artifact2.inputs.items[0]);
+    try std.testing.expectEqualStrings("bar2.c", artifact2.inputs.items[1]);
+    try std.testing.expectEqual(1, artifact2.flags.count());
+    try std.testing.expect(artifact2.flags.contains("-Wall"));
+
+    const artifact3 = artifacts.list.items[2];
+    try std.testing.expectEqual(1, artifact3.inputs.items.len);
+    try std.testing.expectEqualStrings("test.c", artifact3.inputs.items[0]);
+    try std.testing.expectEqual(2, artifact3.flags.count());
+    try std.testing.expect(artifact3.flags.contains("-Werror"));
+    try std.testing.expect(artifact3.flags.contains("-Wformat"));
 }
