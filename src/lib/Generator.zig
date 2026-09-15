@@ -158,7 +158,6 @@ fn parseFlags(
     allocator: std.mem.Allocator,
     stream: []const u8,
     flags: *std.StringHashMapUnmanaged(void),
-    
 ) !void {
     var tokens = std.mem.tokenizeAny(u8, stream, " ");
     while (tokens.next()) |token| {
@@ -198,29 +197,46 @@ fn writeArtifacts(
     artifacts: Artifact.Collection,
     build_dir: []const u8,
 ) !void {
+    // Write all libraries first
     for (artifacts.list.items) |artifact| {
         if (artifact.output_type != .library) continue;
 
-        const output_path = artifact.getOutputName() orelse "module";
-        const name = std.fs.path.stem(output_path);
+        const name = artifact.getOutputName() orelse "module";
         try writeAddModule(writer, name);
 
+        var input_artifacts = std.ArrayListUnmanaged(Artifact).empty;
+        defer input_artifacts.deinit(allocator);
+
+        // Grab all artifacts needed to generate the library artifact.
         for (artifact.inputs.items) |input| {
             const input_artifact = artifacts.getByOutput(input) orelse continue;
             if (input_artifact.inputs.items.len == 0) continue;
+
+            try input_artifacts.append(allocator, input_artifact);
+        }
+
+        var written = std.ArrayListUnmanaged(Artifact).empty;
+        defer written.deinit(allocator);
+
+        outer: for (input_artifacts.items) |input_artifact| {
+            for (written.items) |item| {
+                if (item.hasSameOutputs(input_artifact)) continue :outer;
+            }
 
             try writer.print("    {s}.addCSourceFiles(.{{\n", .{name});
             try writer.print("        .files = &.{{\n", .{});
             try writer.flush();
 
-            for (input_artifact.inputs.items) |file| {
-                const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
-                defer allocator.free(relative);
+            try writeInputs(allocator, writer, input_artifact, build_dir);
+            try written.append(allocator, input_artifact);
 
-                std.mem.replaceScalar(u8, relative, '\\', '/');
+            for (input_artifacts.items) |inner| {
+                if (input_artifact.hasSameOutputs(inner)) continue;
 
-                try writer.print("            \"{s}\",\n", .{relative});
-                try writer.flush();
+                if (input_artifact.hasSameFlags(inner)) {
+                    try writeInputs(allocator, writer, inner, build_dir);
+                    try written.append(allocator, inner);
+                }
             }
 
             try writer.print("        }},\n", .{});
@@ -236,7 +252,25 @@ fn writeArtifacts(
             try writer.print("    }});\n", .{});
             try writer.flush();
         }
+    }
 
+}
+
+fn writeInputs(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    artifact: Artifact,
+    build_dir: []const u8,
+) !void {
+
+    for (artifact.inputs.items) |file| {
+        const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
+        defer allocator.free(relative);
+
+        std.mem.replaceScalar(u8, relative, '\\', '/');
+
+        try writer.print("            \"{s}\",\n", .{relative});
+        try writer.flush();
     }
 }
 
@@ -318,7 +352,6 @@ test "generator gather files and flags" {
     defer artifacts.deinit(allocator);
 
     try std.testing.expectEqual(3, artifacts.list.items.len);
-
 
     const artifact1 = artifacts.list.items[0];
     try std.testing.expectEqual(1, artifact1.inputs.items.len);

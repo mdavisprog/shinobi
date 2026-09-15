@@ -52,5 +52,30 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
 
 pub fn getOutputName(self: Self) ?[]const u8 {
     if (self.outputs.items.len == 0) return null;
-    return self.outputs.items[0];
+    return std.fs.path.stem(self.outputs.items[0]);
+}
+
+pub fn hasSameOutputs(self: Self, value: Self) bool {
+    if (self.outputs.items.len != value.outputs.items.len) return false;
+
+    for (0..self.outputs.items.len) |i| {
+        if (!std.mem.eql(u8, self.outputs.items[i], value.outputs.items[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+pub fn hasSameFlags(self: Self, value: Self) bool {
+    if (self.flags.count() != value.flags.count()) return false;
+
+    var it = self.flags.keyIterator();
+    while (it.next()) |flag| {
+        if (!value.flags.contains(flag.*)) {
+            return false;
+        }
+    }
+
+    return true;
 }
