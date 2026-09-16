@@ -39,6 +39,9 @@ pub fn generate(
         return;
     };
 
+    const absolute_dir = try std.Io.Dir.cwd().realPathFileAlloc(io, dir, allocator);
+    defer allocator.free(absolute_dir);
+
     const output_path = try std.fs.path.join(allocator, &.{ dir, "build.zig" });
     defer allocator.free(output_path);
 
@@ -56,7 +59,7 @@ pub fn generate(
 
     try writeHeader(&writer.interface);
     try writeBuildVars(&writer.interface);
-    try writeArtifacts(allocator, &writer.interface, artifacts, dir);
+    try writeArtifacts(allocator, &writer.interface, artifacts, absolute_dir);
     try writeFooter(&writer.interface);
 
     if (options.print_summary) {
@@ -69,31 +72,36 @@ fn gatherArtifacts(allocator: std.mem.Allocator, parser: Parser) !Artifact.Colle
 
     for (parser.builds.items) |build| {
         var artifact = Artifact{};
+        artifact.output_type = .other;
         artifact.flags = try getFlags(allocator, build, parser);
 
-        var is_compile_command = false;
+        var has_compile_command = false;
+        var has_link_command = false;
+        var has_clang_command = false;
+
         var it = artifact.flags.keyIterator();
         while (it.next()) |flag| {
             if (std.mem.eql(u8, flag.*, "-c")) {
-                is_compile_command = true;
-                break;
+                has_compile_command = true;
+            }
+
+            if (std.mem.containsAtLeast(u8, flag.*, 1, "llvm-ar")) {
+                has_link_command = true;
+            }
+
+            if (std.mem.containsAtLeast(u8, flag.*, 1, "clang")) {
+                has_clang_command = true;
             }
         }
 
-        artifact.output_type = blk: {
-            if (is_compile_command) {
-                break :blk .object;
-            }
-
-            for (build.outputs.items) |output| {
-                const ext = std.fs.path.extension(output);
-                if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
-                    break :blk .library;
-                }
-            }
-
-            break :blk .executable;
-        };
+        artifact.output_type = if (has_compile_command)
+            .object
+        else if (has_link_command)
+            .library
+        else if (has_clang_command)
+            .executable
+        else
+            .other;
 
         for (build.inputs.items) |input| {
             switch (artifact.output_type) {
@@ -191,6 +199,18 @@ fn writeAddModule(writer: *std.Io.Writer, name: []const u8) !void {
     try writer.flush();
 }
 
+fn writeAddExecutable(writer: *std.Io.Writer, name: []const u8) !void {
+    try writer.print("    const {s} = b.addExecutable(.{{\n", .{name});
+    try writer.print("        .name = \"{s}\",\n", .{name});
+    try writer.print("        .root_module = b.createModule(.{{\n", .{});
+    try writer.print("            .target = target,\n", .{});
+    try writer.print("            .optimize = optimize,\n", .{});
+    try writer.print("            .link_libc = true,\n", .{});
+    try writer.print("        }}),\n", .{});
+    try writer.print("    }});\n", .{});
+    try writer.flush();
+}
+
 fn writeArtifacts(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
@@ -201,59 +221,98 @@ fn writeArtifacts(
     for (artifacts.list.items) |artifact| {
         if (artifact.output_type != .library) continue;
 
-        const name = artifact.getOutputName() orelse "module";
-        try writeAddModule(writer, name);
-
-        var input_artifacts = std.ArrayListUnmanaged(Artifact).empty;
-        defer input_artifacts.deinit(allocator);
-
-        // Grab all artifacts needed to generate the library artifact.
-        for (artifact.inputs.items) |input| {
-            const input_artifact = artifacts.getByOutput(input) orelse continue;
-            if (input_artifact.inputs.items.len == 0) continue;
-
-            try input_artifacts.append(allocator, input_artifact);
-        }
-
-        var written = std.ArrayListUnmanaged(Artifact).empty;
-        defer written.deinit(allocator);
-
-        outer: for (input_artifacts.items) |input_artifact| {
-            for (written.items) |item| {
-                if (item.hasSameOutputs(input_artifact)) continue :outer;
-            }
-
-            try writer.print("    {s}.addCSourceFiles(.{{\n", .{name});
-            try writer.print("        .files = &.{{\n", .{});
-            try writer.flush();
-
-            try writeInputs(allocator, writer, input_artifact, build_dir);
-            try written.append(allocator, input_artifact);
-
-            for (input_artifacts.items) |inner| {
-                if (input_artifact.hasSameOutputs(inner)) continue;
-
-                if (input_artifact.hasSameFlags(inner)) {
-                    try writeInputs(allocator, writer, inner, build_dir);
-                    try written.append(allocator, inner);
-                }
-            }
-
-            try writer.print("        }},\n", .{});
-            try writer.print("        .flags = &.{{\n", .{});
-
-            var it = input_artifact.flags.keyIterator();
-            while (it.next()) |flag| {
-                try writer.print("            \"{s}\",\n", .{flag.*});
-                try writer.flush();
-            }
-
-            try writer.print("        }},\n", .{});
-            try writer.print("    }});\n", .{});
-            try writer.flush();
-        }
+        try writeArtifact(allocator, writer, artifact, artifacts, build_dir);
     }
 
+    // Write all executables next
+    for (artifacts.list.items) |artifact| {
+        if (artifact.output_type != .executable) continue;
+
+        try writeArtifact(allocator, writer, artifact, artifacts, build_dir);
+    }
+}
+
+fn writeArtifact(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    artifact: Artifact,
+    artifacts: Artifact.Collection,
+    build_dir: []const u8,
+) !void {
+    const name = artifact.getOutputName();
+
+    switch (artifact.output_type) {
+        .executable => {
+            try writeAddExecutable(writer, name);
+        },
+        .library => {
+            try writeAddModule(writer, name);
+        },
+        else => return,
+    }
+
+    var input_artifacts = std.ArrayListUnmanaged(Artifact).empty;
+    defer input_artifacts.deinit(allocator);
+
+    // Grab all artifacts needed to generate the library artifact.
+    outer: for (artifact.inputs.items) |input| {
+        const input_artifact = artifacts.getByOutput(input) orelse continue;
+        if (input_artifact.inputs.items.len == 0) continue;
+
+        for (input_artifact.inputs.items) |file| {
+            if (!isValidSourceFile(file)) continue :outer;
+        }
+
+        try input_artifacts.append(allocator, input_artifact);
+    }
+
+    var written = std.ArrayListUnmanaged(Artifact).empty;
+    defer written.deinit(allocator);
+
+    outer: for (input_artifacts.items) |input_artifact| {
+        for (written.items) |item| {
+            if (item.hasSameOutputs(input_artifact)) continue :outer;
+        }
+
+        try writer.print("    {s}{s}.addCSourceFiles(.{{\n", .{
+            name,
+            if (artifact.output_type == .executable) ".root_module" else "",
+        });
+        try writer.print("        .files = &.{{\n", .{});
+        try writer.flush();
+
+        try writeInputs(allocator, writer, input_artifact, build_dir);
+        try written.append(allocator, input_artifact);
+
+        for (input_artifacts.items) |inner| {
+            if (input_artifact.hasSameOutputs(inner)) continue;
+
+            if (input_artifact.hasSameFlags(inner)) {
+                try writeInputs(allocator, writer, inner, build_dir);
+                try written.append(allocator, inner);
+            }
+        }
+
+        try writer.print("        }},\n", .{});
+        try writer.print("        .flags = &.{{\n", .{});
+
+        var it = input_artifact.flags.keyIterator();
+        while (it.next()) |flag| {
+            try writer.print("            \"{s}\",\n", .{flag.*});
+            try writer.flush();
+        }
+
+        try writer.print("        }},\n", .{});
+        try writer.print("    }});\n", .{});
+        try writer.flush();
+
+        try writeImports(allocator, writer, artifact);
+    }
+
+    if (artifact.output_type == .executable) {
+        try writer.print("    b.installArtifact({s});\n", .{name});
+        try writer.flush();
+    }
 }
 
 fn writeInputs(
@@ -262,7 +321,6 @@ fn writeInputs(
     artifact: Artifact,
     build_dir: []const u8,
 ) !void {
-
     for (artifact.inputs.items) |file| {
         const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
         defer allocator.free(relative);
@@ -271,6 +329,37 @@ fn writeInputs(
 
         try writer.print("            \"{s}\",\n", .{relative});
         try writer.flush();
+    }
+}
+
+fn writeImports(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    artifact: Artifact,
+) !void {
+    switch (artifact.output_type) {
+        .executable, .library => {},
+        else => return,
+    }
+
+    var added = std.StringHashMapUnmanaged(void).empty;
+    defer added.deinit(allocator);
+
+    for (artifact.inputs.items) |input| {
+        const ext = std.fs.path.extension(input);
+        if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
+            const name = std.fs.path.stem(input);
+
+            if (added.contains(name)) continue;
+            try added.put(allocator, name, {});
+
+            try writer.print("    {s}{s}.addImport(\"{s}\", {s});\n", .{
+                artifact.getOutputName(),
+                if (artifact.output_type == .executable) ".root_module" else "",
+                name,
+                name,
+            });
+        }
     }
 }
 
@@ -298,6 +387,15 @@ fn isValidFlag(flag: []const u8) bool {
     // Ignore 'compile' and 'output' flag
     if (std.mem.eql(u8, flag, "-c")) return false;
     if (std.mem.eql(u8, flag, "-o")) return false;
+    if (std.mem.eql(u8, flag, "--dependent-lib=msvcrt")) return false;
+    if (std.mem.eql(u8, flag, "-D_MT")) return false;
+    if (std.mem.eql(u8, flag, "-O3")) return false;
+    if (std.mem.eql(u8, flag, "-MT")) return false;
+    if (std.mem.eql(u8, flag, "-Xclang")) return false;
+    if (std.mem.eql(u8, flag, "-D_DLL")) return false;
+    if (std.mem.eql(u8, flag, "-DNDEBUG")) return false;
+    if (std.mem.eql(u8, flag, "-MD")) return false;
+    if (std.mem.eql(u8, flag, "-MF")) return false;
 
     return true;
 }

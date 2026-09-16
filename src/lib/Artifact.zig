@@ -5,6 +5,7 @@ pub const Type = enum {
     object,
     library,
     executable,
+    other,
 };
 
 /// List of artifacts
@@ -50,8 +51,13 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.flags.deinit(allocator);
 }
 
-pub fn getOutputName(self: Self) ?[]const u8 {
-    if (self.outputs.items.len == 0) return null;
+pub fn getOutputName(self: Self) []const u8 {
+    if (self.outputs.items.len == 0) return switch (self.output_type) {
+        .executable => "exe",
+        .library => "module",
+        .object => "object",
+        .other => "other",
+    };
     return std.fs.path.stem(self.outputs.items[0]);
 }
 
