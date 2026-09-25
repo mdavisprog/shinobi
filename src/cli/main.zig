@@ -31,5 +31,11 @@ pub fn main(init: std.process.Init) !void {
 
     std.log.info("Attempting to parse ninja file '{s}'", .{path});
 
-    try generator.generate(allocator, io, path, options);
+    generator.generate(allocator, io, path, options) catch |err| {
+        if (err == std.Io.File.OpenError.FileNotFound) {
+            std.log.err("File '{s}' doesn't exist!", .{path});
+        } else {
+            return err;
+        }
+    };
 }
