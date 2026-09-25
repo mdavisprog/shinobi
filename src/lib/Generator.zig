@@ -222,6 +222,7 @@ fn writeArtifacts(
         if (artifact.output_type != .library) continue;
 
         try writeArtifact(allocator, writer, artifact, artifacts, build_dir);
+        try writer.print("\n", .{});
     }
 
     // Write all executables next
@@ -269,7 +270,31 @@ fn writeArtifact(
     var written = std.ArrayListUnmanaged(Artifact).empty;
     defer written.deinit(allocator);
 
+    var includes = std.ArrayListUnmanaged([]const u8).empty;
+    defer includes.deinit(allocator);
+
     outer: for (input_artifacts.items) |input_artifact| {
+        var flags = input_artifact.flags.keyIterator();
+        while (flags.next()) |flag| {
+            if (!std.mem.startsWith(u8, flag.*, "-I")) {
+                continue;
+            }
+
+            const path = flag.*[2..];
+
+            var found = false;
+            for (includes.items) |include| {
+                if (std.mem.eql(u8, path, include)) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                try includes.append(allocator, path);
+            }
+        }
+
         for (written.items) |item| {
             if (item.hasSameOutputs(input_artifact)) continue :outer;
         }
@@ -298,6 +323,10 @@ fn writeArtifact(
 
         var it = input_artifact.flags.keyIterator();
         while (it.next()) |flag| {
+            if (std.mem.startsWith(u8, flag.*, "-I")) {
+                continue;
+            }
+
             try writer.print("            \"{s}\",\n", .{flag.*});
             try writer.flush();
         }
@@ -307,6 +336,19 @@ fn writeArtifact(
         try writer.flush();
 
         try writeImports(allocator, writer, artifact);
+    }
+
+    for (includes.items) |include| {
+        const relative = try std.fs.path.relative(allocator, ".", null, build_dir, include);
+        defer allocator.free(relative);
+
+        std.mem.replaceScalar(u8, relative, '\\', '/');
+
+        try writer.print("    {s}{s}.addIncludePath(b.path(\"{s}\"));\n", .{
+            artifact.getOutputName(),
+            if (artifact.output_type == .executable) ".root_module" else "",
+            relative,
+        });
     }
 
     if (artifact.output_type == .executable) {
