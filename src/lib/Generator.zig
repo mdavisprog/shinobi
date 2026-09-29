@@ -1,5 +1,6 @@
 const Artifact = @import("Artifact.zig");
 const BuildStatement = @import("BuildStatement.zig");
+const cmake = @import("cmake.zig");
 const Parser = @import("Parser.zig");
 const Rule = @import("Rule.zig");
 const std = @import("std");
@@ -10,9 +11,17 @@ pub const Error = error{
     InvalidRule,
 };
 
-/// List of options to control generator.
+/// List of options to control the generator.
 pub const Options = struct {
+    /// Prints the summary of what has been parsed.
     print_summary: bool = false,
+
+    /// The configuration used to generate a 'build.ninja' file if the generator
+    /// is given a directory path and the directory contains a 'CMakeLists.txt' file.
+    configuration: std.builtin.OptimizeMode = .ReleaseFast,
+
+    /// Path containing the cmake binary.
+    cmake_bin_path: ?[]const u8 = null,
 };
 
 /// Manages parsing a 'ninja' file and emitting a 'build.zig' file.
@@ -27,15 +36,20 @@ pub fn generate(
 ) !void {
     _ = self;
 
-    var parser = try Parser.initFile(allocator, io, path);
+    const resolved_path = try resolvePath(allocator, io, path, options);
+    defer allocator.free(resolved_path);
+
+    std.log.info("Attempting to parse ninja file '{s}'", .{resolved_path});
+
+    var parser = try Parser.initFile(allocator, io, resolved_path);
     defer parser.deinit(allocator, io);
 
     try parser.begin(allocator, io);
 
     std.log.info("Generating 'build.zig' file", .{});
 
-    const dir = std.fs.path.dirname(path) orelse {
-        std.log.err("Failed to retrieve directory of ninja file '{s}'!", .{path});
+    const dir = std.fs.path.dirname(resolved_path) orelse {
+        std.log.err("Failed to retrieve directory of ninja file '{s}'!", .{resolved_path});
         return;
     };
 
@@ -458,6 +472,52 @@ fn getVariable(name: []const u8, build: BuildStatement, parser: Parser) ?Variabl
     }
 
     return null;
+}
+
+fn resolvePath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    options: Options,
+) ![]const u8 {
+    // Check if given path is a 'build.ninja' file or a directory.
+    const extension = std.fs.path.extension(path);
+    if (std.mem.eql(u8, extension, ".ninja")) {
+        return allocator.dupe(u8, path);
+    } else {
+        const open_options = std.Io.Dir.OpenOptions{ .iterate = true };
+        const dir = if (std.fs.path.isAbsolute(path))
+            try std.Io.Dir.openDirAbsolute(io, path, open_options)
+        else
+            try std.Io.Dir.cwd().openDir(io, path, open_options);
+
+        defer dir.close(io);
+
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .file) continue;
+
+            if (std.mem.eql(u8, entry.name, "build.ninja")) {
+                std.log.info("Found 'build.ninja' file in given path.", .{});
+                return std.fs.path.join(allocator, &.{ path, entry.name });
+            } else if (std.mem.eql(u8, entry.name, "CMakeLists.txt")) {
+                const cmake_options = cmake.Options{
+                    .build_type = .fromOptimizeMode(options.configuration),
+                    .bin_path = options.cmake_bin_path,
+                };
+                const result = try cmake.generate(
+                    allocator,
+                    io,
+                    path,
+                    cmake_options,
+                );
+
+                return result.ninja_path orelse std.Io.File.OpenError.FileNotFound;
+            }
+        }
+    }
+
+    return std.Io.File.OpenError.FileNotFound;
 }
 
 test "generator gather files and flags" {

@@ -19,6 +19,8 @@ pub fn main(init: std.process.Init) !void {
 
         if (std.mem.eql(u8, arg, "--print-summary")) {
             options.print_summary = true;
+        } else if (std.mem.eql(u8, arg, "--cmake-bin-path")) {
+            options.cmake_bin_path = args.next();
         }
     }
 
@@ -28,8 +30,6 @@ pub fn main(init: std.process.Init) !void {
     };
 
     const generator = lib.Generator{};
-
-    std.log.info("Attempting to parse ninja file '{s}'", .{path});
 
     generator.generate(allocator, io, path, options) catch |err| {
         if (err == std.Io.File.OpenError.FileNotFound) {
