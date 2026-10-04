@@ -103,6 +103,10 @@ fn gatherArtifacts(allocator: std.mem.Allocator, parser: Parser) !Artifact.Colle
                 has_link_command = true;
             }
 
+            if (std.mem.containsAtLeast(u8, flag.*, 1, "bin/ar")) {
+                has_link_command = true;
+            }
+
             if (std.mem.containsAtLeast(u8, flag.*, 1, "clang")) {
                 has_clang_command = true;
             }
