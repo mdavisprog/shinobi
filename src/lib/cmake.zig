@@ -107,8 +107,8 @@ pub fn generate(
     try arguments.appendFormat("{s}/{s}", .{ path, build_path });
     try arguments.append("-S");
     try arguments.append(path);
-    try arguments.append("-DCMAKE_C_COMPILER=clang");
-    try arguments.append("-DCMAKE_CXX_COMPILER=clang++");
+    try arguments.append("'-DCMAKE_C_COMPILER=zig cc'");
+    try arguments.append("'-DCMAKE_CXX_COMPILER=zig c++'");
     try arguments.append("-DCMAKE_MAKE_PROGRAM=ninja");
     try arguments.appendFormat("-DCMAKE_BUILD_TYPE={s}", .{options.build_type.toStr()});
 
