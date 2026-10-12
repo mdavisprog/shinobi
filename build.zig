@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) !void {
     const lib = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/lib/root.zig"),
+        .root_source_file = b.path("shinobi.zig"),
     });
 
     const exe = b.addExecutable(.{
