@@ -9,7 +9,7 @@ pub fn main(init: std.process.Init) !void {
     defer args.deinit();
 
     var maybe_path: ?[]const u8 = null;
-    var options = lib.Generator.Options{};
+    var options = lib.Options{};
 
     var index: usize = 0;
     while (args.next()) |arg| : (index += 1) {
@@ -29,9 +29,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     };
 
-    const generator = lib.Generator{};
-
-    generator.generate(allocator, io, path, options) catch |err| {
+    lib.generate(allocator, io, path, options) catch |err| {
         if (err == std.Io.File.OpenError.FileNotFound) {
             std.log.err("File '{s}' doesn't exist!", .{path});
         } else {
