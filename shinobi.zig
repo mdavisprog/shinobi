@@ -178,7 +178,7 @@ pub const Generator = struct {
 
     fn getFlags(
         allocator: std.mem.Allocator,
-        build: BuildStatement,
+        build: Build,
         parser: Parser,
     ) !std.StringHashMapUnmanaged(void) {
         var flags = std.StringHashMapUnmanaged(void).empty;
@@ -480,7 +480,7 @@ pub const Generator = struct {
         return true;
     }
 
-    fn getVariable(name: []const u8, build: BuildStatement, parser: Parser) ?Variable {
+    fn getVariable(name: []const u8, build: Build, parser: Parser) ?Variable {
         if (build.variables.get(name)) |variable| {
             return variable;
         }
@@ -588,13 +588,13 @@ const Rule = struct {
 };
 
 /// Contains the relationship between input and output files.
-const BuildStatement = struct {
+const Build = struct {
     inputs: std.ArrayListUnmanaged([]const u8),
     outputs: std.ArrayListUnmanaged([]const u8),
     variables: std.StringHashMapUnmanaged(Variable),
     rule: ?[]const u8,
 
-    fn init() BuildStatement {
+    fn init() Build {
         return .{
             .inputs = .empty,
             .outputs = .empty,
@@ -603,7 +603,7 @@ const BuildStatement = struct {
         };
     }
 
-    fn deinit(self: *BuildStatement, allocator: std.mem.Allocator) void {
+    fn deinit(self: *Build, allocator: std.mem.Allocator) void {
         for (self.inputs.items) |input| {
             allocator.free(input);
         }
@@ -978,7 +978,7 @@ const Parser = struct {
     lexer: Lexer,
     variables: std.StringHashMapUnmanaged(Variable) = .empty,
     rules: std.StringHashMapUnmanaged(Rule) = .empty,
-    builds: std.ArrayListUnmanaged(BuildStatement) = .empty,
+    builds: std.ArrayListUnmanaged(Build) = .empty,
 
     fn initStream(stream: []const u8) Parser {
         return .{
@@ -1183,8 +1183,8 @@ const Parser = struct {
         return rule;
     }
 
-    fn parseBuild(self: *Parser, allocator: std.mem.Allocator) !BuildStatement {
-        var build = BuildStatement.init();
+    fn parseBuild(self: *Parser, allocator: std.mem.Allocator) !Build {
+        var build = Build.init();
         errdefer build.deinit(allocator);
 
         var parsing_outputs = true;
