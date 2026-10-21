@@ -32,6 +32,9 @@ pub const Options = struct {
     /// Prints the summary of what has been parsed.
     print_summary: bool = false,
 
+    /// The target to add modules/executables to the build graph with.
+    target: ?std.Build.ResolvedTarget = null,
+
     /// The configuration used to generate a 'build.ninja' file if the generator
     /// is given a directory path and the directory contains a 'CMakeLists.txt' file.
     configuration: std.builtin.OptimizeMode = .ReleaseFast,
@@ -44,7 +47,8 @@ pub const Options = struct {
 /// add all modules and executables needed to build the library located in this
 /// directory.
 pub fn add_directory(b: *std.Build, path: []const u8, options: Options) !void {
-    try generate(b.allocator, b.graph.io, path, options);
+    const generator = Generator{};
+    try generator.add(b, path, options);
 }
 
 /// Function to be used from a runtime application.
@@ -790,6 +794,45 @@ const Generator = struct {
         InvalidRule,
     };
 
+    fn add(
+        self: Generator,
+        b: *std.Build,
+        path: []const u8,
+        options: Options,
+    ) !void {
+        _ = self;
+
+        const allocator = b.allocator;
+        const io = b.graph.io;
+
+        const resolved_path = try resolvePath(allocator, io, path, options);
+        defer b.allocator.free(resolved_path);
+
+        std.log.info("Attempting to parse ninja file '{s}'", .{resolved_path});
+
+        var parser = try Parser.initFile(allocator, io, resolved_path);
+        defer parser.deinit(allocator, io);
+
+        try parser.begin(allocator, io);
+
+        var artifacts = try gatherArtifacts(allocator, parser);
+        defer artifacts.deinit(allocator);
+
+        // Add all libraries first
+        for (artifacts.list.items) |artifact| {
+            if (artifact.output_type != .library) continue;
+
+            try addModule(b, artifact, artifacts, b.build_root.path.?, options);
+        }
+
+        // Add all executables next
+        for (artifacts.list.items) |artifact| {
+            if (artifact.output_type != .executable) continue;
+
+            try addExecutable(b, artifact, artifacts, b.build_root.path.?, options);
+        }
+    }
+
     fn generate(
         self: Generator,
         allocator: std.mem.Allocator,
@@ -1033,20 +1076,8 @@ const Generator = struct {
             else => return,
         }
 
-        var input_artifacts = std.ArrayListUnmanaged(Artifact).empty;
+        var input_artifacts = try getInputArtifacts(allocator, artifact, artifacts);
         defer input_artifacts.deinit(allocator);
-
-        // Grab all artifacts needed to generate the library artifact.
-        outer: for (artifact.inputs.items) |input| {
-            const input_artifact = artifacts.getByOutput(input) orelse continue;
-            if (input_artifact.inputs.items.len == 0) continue;
-
-            for (input_artifact.inputs.items) |file| {
-                if (!isValidSourceFile(file)) continue :outer;
-            }
-
-            try input_artifacts.append(allocator, input_artifact);
-        }
 
         var written = std.ArrayListUnmanaged(Artifact).empty;
         defer written.deinit(allocator);
@@ -1286,6 +1317,156 @@ const Generator = struct {
         }
 
         return std.Io.File.OpenError.FileNotFound;
+    }
+
+    fn getInputArtifacts(
+        allocator: std.mem.Allocator,
+        artifact: Artifact,
+        artifacts: Artifact.Collection,
+    ) !std.ArrayListUnmanaged(Artifact) {
+        var result = std.ArrayListUnmanaged(Artifact).empty;
+
+        outer: for (artifact.inputs.items) |input| {
+            const input_artifact = artifacts.getByOutput(input) orelse continue;
+            if (input_artifact.inputs.items.len == 0) continue;
+
+            for (input_artifact.inputs.items) |file| {
+                if (!isValidSourceFile(file)) continue :outer;
+            }
+
+            try result.append(allocator, input_artifact);
+        }
+
+        return result;
+    }
+
+    fn addModule(
+        b: *std.Build,
+        artifact: Artifact,
+        artifacts: Artifact.Collection,
+        build_dir: []const u8,
+        options: Options,
+    ) !void {
+        if (artifact.output_type != .library) return;
+
+        const module = b.addModule(artifact.getOutputName(), .{
+            .target = options.target,
+            .optimize = options.configuration,
+        });
+
+        try addSourceFiles(module, artifact, artifacts, build_dir);
+    }
+
+    fn addExecutable(
+        b: *std.Build,
+        artifact: Artifact,
+        artifacts: Artifact.Collection,
+        build_dir: []const u8,
+        options: Options,
+    ) !void {
+        if (artifact.output_type != .executable) return;
+
+        const exe = b.addExecutable(.{
+            .name = artifact.getOutputName(),
+            .root_module = b.createModule(.{
+                .target = options.target,
+                .optimize = options.configuration,
+            }),
+        });
+
+        try addSourceFiles(exe.root_module, artifact, artifacts, build_dir);
+    }
+
+    fn addSourceFiles(
+        module: *std.Build.Module,
+        artifact: Artifact,
+        artifacts: Artifact.Collection,
+        build_dir: []const u8,
+    ) !void {
+        const allocator = module.owner.allocator;
+
+        var input_artifacts = try getInputArtifacts(allocator, artifact, artifacts);
+        defer input_artifacts.deinit(allocator);
+
+        var includes = std.ArrayListUnmanaged([]const u8).empty;
+        defer includes.deinit(allocator);
+
+        var written = std.ArrayListUnmanaged(Artifact).empty;
+        defer written.deinit(allocator);
+
+        var files = std.ArrayListUnmanaged([]const u8).empty;
+        var flags = std.ArrayListUnmanaged([]const u8).empty;
+
+        outer: for (input_artifacts.items) |input_artifact| {
+            var it = input_artifact.flags.keyIterator();
+            while (it.next()) |flag| {
+                if (!std.mem.startsWith(u8, flag.*, "-I")) {
+                    continue;
+                }
+
+                const path = flag.*[2..];
+
+                var found = false;
+                for (includes.items) |include| {
+                    if (std.mem.eql(u8, path, include)) {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    try includes.append(allocator, path);
+                }
+            }
+
+            for (written.items) |item| {
+                if (item.hasSameOutputs(input_artifact)) continue :outer;
+            }
+
+            try written.append(allocator, input_artifact);
+            try gatherSourceFiles(allocator, &files, input_artifact, build_dir);
+
+            for (input_artifacts.items) |inner| {
+                if (input_artifact.hasSameOutputs(inner)) continue;
+
+                if (input_artifact.hasSameFlags(inner)) {
+                    try written.append(allocator, inner);
+                    try gatherSourceFiles(allocator, &files, inner, build_dir);
+                }
+            }
+
+            it = input_artifact.flags.keyIterator();
+            while (it.next()) |flag| {
+                if (std.mem.startsWith(u8, flag.*, "-I")) {
+                    continue;
+                }
+
+                try flags.append(allocator, flag.*);
+            }
+        }
+
+        module.link_libc = true;
+        module.addCSourceFiles(.{
+            .files = try files.toOwnedSlice(allocator),
+            .flags = try flags.toOwnedSlice(allocator),
+        });
+
+        for (includes.items) |include| {
+            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, include);
+            module.addIncludePath(module.owner.path(relative));
+        }
+    }
+
+    fn gatherSourceFiles(
+        allocator: std.mem.Allocator,
+        files: *std.ArrayListUnmanaged([]const u8),
+        artifact: Artifact,
+        build_dir: []const u8,
+    ) !void {
+        for (artifact.inputs.items) |file| {
+            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
+            try files.append(allocator, relative);
+        }
     }
 };
 
