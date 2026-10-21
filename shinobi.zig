@@ -1210,7 +1210,6 @@ const Generator = struct {
         // Ignore 'compile' and 'output' flag
         if (std.mem.eql(u8, flag, "-c")) return false;
         if (std.mem.eql(u8, flag, "-o")) return false;
-        if (std.mem.eql(u8, flag, "--dependent-lib=msvcrt")) return false;
         if (std.mem.eql(u8, flag, "-D_MT")) return false;
         if (std.mem.eql(u8, flag, "-O3")) return false;
         if (std.mem.eql(u8, flag, "-MT")) return false;
@@ -1219,6 +1218,8 @@ const Generator = struct {
         if (std.mem.eql(u8, flag, "-DNDEBUG")) return false;
         if (std.mem.eql(u8, flag, "-MD")) return false;
         if (std.mem.eql(u8, flag, "-MF")) return false;
+
+        if (std.mem.startsWith(u8, flag, "--dependent-lib")) return false;
 
         return true;
     }
