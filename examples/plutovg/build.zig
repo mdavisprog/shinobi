@@ -1,15 +1,33 @@
 const std = @import("std");
+const shinobi = @import("shinobi.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    try shinobi.add_directory(b, "external/plutovg", .{
+        .target = target,
+        .configuration = optimize,
+    });
+
+    const plutovg_bindings = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("plutovg.zig"),
+        .imports = &.{
+            .{ .name = "plutovg", .module = b.modules.get("plutovg").? },
+        },
+    });
+
     const exe = b.addExecutable(.{
-        .name = "plutovg",
+        .name = "smiley",
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
             .root_source_file = b.path("main.zig"),
+            .imports = &.{
+                .{ .name = "plutovg", .module = plutovg_bindings },
+            },
         }),
     });
 
