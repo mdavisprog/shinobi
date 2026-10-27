@@ -201,7 +201,13 @@ const Artifact = struct {
             .object => "object",
             .other => "other",
         };
-        return std.fs.path.stem(self.outputs.items[0]);
+
+        const stem = std.fs.path.stem(self.outputs.items[0]);
+        if (std.mem.startsWith(u8, stem, "lib")) {
+            return stem[3..];
+        }
+
+        return stem;
     }
 
     fn hasSameOutputs(self: Artifact, value: Artifact) bool {
