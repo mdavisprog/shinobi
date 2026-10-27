@@ -48,4 +48,20 @@ pub fn build(b: *std.Build) !void {
     const exe_test_run = b.addRunArtifact(exe_test);
     test_step.dependOn(&exe_test_run.step);
 
+    try copyLibraryToExamples(b);
+}
+
+fn copyLibraryToExamples(b: *std.Build) !void {
+    const root_path_lazy = b.path("");
+    const root_path_cache = try root_path_lazy.getPath4(b, null);
+
+    const root_lib_path = try root_path_cache.joinString(b.allocator, "shinobi.zig");
+    defer b.allocator.free(root_lib_path);
+
+    std.log.info("Copying 'shinobi.zig' file to examples...", .{});
+
+    const plutovg_path = try root_path_cache.joinString(b.allocator, "examples/plutovg/shinobi.zig");
+    defer b.allocator.free(plutovg_path);
+
+    try std.Io.Dir.copyFileAbsolute(root_lib_path, plutovg_path, b.graph.io, .{});
 }
