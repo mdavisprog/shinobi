@@ -210,6 +210,12 @@ const Artifact = struct {
         return stem;
     }
 
+    /// Caller owns the returned string.
+    fn getValidOutputName(self: Artifact, allocator: std.mem.Allocator) ![]const u8 {
+        const result = self.getOutputName();
+        return try std.mem.replaceOwned(u8, allocator, result, "-", "_");
+    }
+
     fn hasSameOutputs(self: Artifact, value: Artifact) bool {
         if (self.outputs.items.len != value.outputs.items.len) return false;
 
@@ -1074,7 +1080,8 @@ const Generator = struct {
         artifacts: Artifact.Collection,
         build_dir: []const u8,
     ) !void {
-        const name = artifact.getOutputName();
+        const name = try artifact.getValidOutputName(allocator);
+        defer allocator.free(name);
 
         switch (artifact.output_type) {
             .executable => {
@@ -1167,7 +1174,7 @@ const Generator = struct {
             std.mem.replaceScalar(u8, relative, '\\', '/');
 
             try writer.print("    {s}{s}.addIncludePath(b.path(\"{s}\"));\n", .{
-                artifact.getOutputName(),
+                name,
                 if (artifact.output_type == .executable) ".root_module" else "",
                 relative,
             });
@@ -1209,6 +1216,9 @@ const Generator = struct {
         var added = std.StringHashMapUnmanaged(void).empty;
         defer added.deinit(allocator);
 
+        const output_name = try artifact.getValidOutputName(allocator);
+        defer allocator.free(output_name);
+
         for (artifact.inputs.items) |input| {
             const ext = std.fs.path.extension(input);
             if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
@@ -1218,7 +1228,7 @@ const Generator = struct {
                 try added.put(allocator, name, {});
 
                 try writer.print("    {s}{s}.addImport(\"{s}\", {s});\n", .{
-                    artifact.getOutputName(),
+                    output_name,
                     if (artifact.output_type == .executable) ".root_module" else "",
                     name,
                     name,
