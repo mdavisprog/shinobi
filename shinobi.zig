@@ -1184,6 +1184,8 @@ const Generator = struct {
             try writer.print("    b.installArtifact({s});\n", .{name});
             try writer.flush();
         }
+
+        try writeLibraries(allocator, writer, artifact);
     }
 
     fn writeInputs(
@@ -1234,6 +1236,31 @@ const Generator = struct {
                     name,
                 });
             }
+        }
+    }
+
+    fn writeLibraries(
+        allocator: std.mem.Allocator,
+        writer: *std.Io.Writer,
+        artifact: Artifact,
+    ) !void {
+        switch (artifact.output_type) {
+            .executable, .library => {},
+            else => return,
+        }
+
+        const output_name = try artifact.getValidOutputName(allocator);
+        defer allocator.free(output_name);
+
+        var libs = try getSystemLibraries(allocator, artifact);
+        defer libs.deinit(allocator);
+
+        for (libs.items) |lib| {
+            try writer.print("    {s}{s}.linkSystemLibrary(\"{s}\", .{{}});\n", .{
+                output_name,
+                if (artifact.output_type == .executable) ".root_module" else "",
+                lib,
+            });
         }
     }
 
@@ -1358,6 +1385,37 @@ const Generator = struct {
         }
 
         return result;
+    }
+
+    fn getSystemLibraries(
+        allocator: std.mem.Allocator,
+        artifact: Artifact,
+    ) !std.ArrayListUnmanaged([]const u8) {
+        var result = std.ArrayListUnmanaged([]const u8).empty;
+        errdefer result.deinit(allocator);
+
+        var flags = artifact.flags.keyIterator();
+        while (flags.next()) |flag| {
+            if (!std.mem.startsWith(u8, flag.*, "-l")) {
+                continue;
+            }
+
+            const name = flag.*[2..];
+            if (isValidSystemLibrary(name)) {
+                try result.append(allocator, name);
+            }
+        }
+
+        return result;
+    }
+
+    fn isValidSystemLibrary(name: []const u8) bool {
+        // This seems to be an old win32 system library. Ignore this library for now.
+        if (std.mem.eql(u8, name, "oldnames")) {
+            return false;
+        }
+
+        return true;
     }
 
     fn addModule(
