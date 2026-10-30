@@ -911,6 +911,10 @@ const Generator = struct {
                     has_compile_command = true;
                 }
 
+                if (std.mem.eql(u8, flag.*, "cmake_llvm_rc")) {
+                    has_compile_command = true;
+                }
+
                 if (std.mem.containsAtLeast(u8, flag.*, 1, "llvm-ar")) {
                     has_link_command = true;
                 }
