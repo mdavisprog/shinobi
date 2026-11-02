@@ -74,7 +74,7 @@ pub const Options = struct {
 /// Function to be used by a project's build system. Adding the directory will
 /// add all modules and executables needed to build the library located in this
 /// directory.
-pub fn add_directory(b: *std.Build, path: []const u8, options: *Options) !void {
+pub fn addDirectory(b: *std.Build, path: []const u8, options: *Options) !void {
     const generator = Generator{};
     try generator.add(b, path, options);
 }

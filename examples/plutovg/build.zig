@@ -5,10 +5,11 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    try shinobi.add_directory(b, "external/plutovg", .{
+    var options = shinobi.Options{
         .target = target,
         .configuration = optimize,
-    });
+    };
+    try shinobi.addDirectory(b, "external/plutovg", &options);
 
     const plutovg_bindings = b.createModule(.{
         .target = target,
