@@ -13,7 +13,13 @@ A standalone program can be used to generate the 'build.zig' files which can be 
 
 The first argument is required, and is the path argument. This can be an already generated 'build.zig' file or a directory. If the path is a directory, Shinobi will first look to find a 'build.ninja' file. If one does not exist, Shinobi will look for the appropriate native build file and run the associated tool to generate the 'build.ninja' file. Currently, only CMake is supported.
 
-There are also other options that can be specified:
+## Options
+This section describes what options can be passed into the library or program to control how the native generator behaves before the user can consume the translated output. A table is provided to show how each option can be specified either through the library or the program.
 
-* --cmake-bin-path - Specifies the path the 'cmake' executable is located if this path is not in the system's environment variables.
-* --print-summary - Prints a summary of what was parsed from the ninja file.
+|Name       |Description|Library    |Program    |
+|:----------|:----------|:----------|:----------|
+|Print Summary|Prints a summary of what artifacts were generated.|.print_summary|--print-summary|
+|Target|Controls what architecture to target.|.target|Not Supported Yet|
+|Configuration|Controls whether to use debug or release optimizations.|.configuration|Not Supported Yet|
+|CMake Binary Path|Specify the directory where the 'cmake' executable is located if not in the environment path.|.cmake_bin_path|--cmake-bin-path|
+|Definitions|Add definitions to be passed into the native generator.|addDefinition(key, value)|-D{DEFINITION}|
