@@ -1,17 +1,17 @@
 /// MIT License
-/// 
+///
 /// Copyright (c) 2026 Mitchell Davis
-/// 
+///
 /// Permission is hereby granted, free of charge, to any person obtaining a copy
 /// of this software and associated documentation files (the "Software"), to deal
 /// in the Software without restriction, including without limitation the rights
 /// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 /// copies of the Software, and to permit persons to whom the Software is
 /// furnished to do so, subject to the following conditions:
-/// 
+///
 /// The above copyright notice and this permission notice shall be included in all
 /// copies or substantial portions of the Software.
-/// 
+///
 /// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 /// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 /// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,7 +19,6 @@
 /// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 /// SOFTWARE.
-
 const builtin = @import("builtin");
 const std = @import("std");
 
@@ -41,12 +40,41 @@ pub const Options = struct {
 
     /// Path containing the cmake binary.
     cmake_bin_path: ?[]const u8 = null,
+
+    /// List of definitions to be passed into the native generator.
+    /// This container will own any memory given to it. User should use the
+    /// 'addDefinition' function to populate this field.
+    definitions: std.StringHashMapUnmanaged([]const u8) = .empty,
+
+    /// Cleans up owned memory by this struct.
+    pub fn deinit(self: *Options, allocator: std.mem.Allocator) void {
+        var it = self.definitions.iterator();
+        while (it.next()) |item| {
+            allocator.free(item.key_ptr.*);
+            allocator.free(item.value_ptr.*);
+        }
+        self.definitions.deinit(allocator);
+    }
+
+    /// Adds a definition.
+    pub fn addDefinition(
+        self: *Options,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+        value: []const u8,
+    ) !void {
+        try self.definitions.put(
+            allocator,
+            try allocator.dupe(u8, key),
+            try allocator.dupe(u8, value),
+        );
+    }
 };
 
 /// Function to be used by a project's build system. Adding the directory will
 /// add all modules and executables needed to build the library located in this
 /// directory.
-pub fn add_directory(b: *std.Build, path: []const u8, options: Options) !void {
+pub fn add_directory(b: *std.Build, path: []const u8, options: *Options) !void {
     const generator = Generator{};
     try generator.add(b, path, options);
 }
@@ -56,7 +84,7 @@ pub fn generate(
     allocator: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
-    options: Options,
+    options: *Options,
 ) !void {
     const generator = Generator{};
     try generator.generate(allocator, io, path, options);
@@ -771,8 +799,7 @@ const Parser = struct {
                 parser.builds.deinit(allocator);
                 parser.lexer.deinit(allocator, io);
             }
-        } else {
-        }
+        } else {}
     }
 
     fn move(self: *Parser, allocator: std.mem.Allocator, other: Parser) !void {
@@ -810,14 +837,15 @@ const Generator = struct {
         self: Generator,
         b: *std.Build,
         path: []const u8,
-        options: Options,
+        options: *Options,
     ) !void {
         _ = self;
+        defer options.deinit(b.allocator);
 
         const allocator = b.allocator;
         const io = b.graph.io;
 
-        const resolved_path = try resolvePath(allocator, io, path, options);
+        const resolved_path = try resolvePath(allocator, io, path, options.*);
         defer b.allocator.free(resolved_path);
 
         std.log.info("Attempting to parse ninja file '{s}'", .{resolved_path});
@@ -834,14 +862,14 @@ const Generator = struct {
         for (artifacts.list.items) |artifact| {
             if (artifact.output_type != .library) continue;
 
-            try addModule(b, artifact, artifacts, b.build_root.path.?, options);
+            try addModule(b, artifact, artifacts, b.build_root.path.?, options.*);
         }
 
         // Add all executables next
         for (artifacts.list.items) |artifact| {
             if (artifact.output_type != .executable) continue;
 
-            try addExecutable(b, artifact, artifacts, b.build_root.path.?, options);
+            try addExecutable(b, artifact, artifacts, b.build_root.path.?, options.*);
         }
     }
 
@@ -850,11 +878,12 @@ const Generator = struct {
         allocator: std.mem.Allocator,
         io: std.Io,
         path: []const u8,
-        options: Options,
+        options: *Options,
     ) !void {
         _ = self;
+        defer options.deinit(allocator);
 
-        const resolved_path = try resolvePath(allocator, io, path, options);
+        const resolved_path = try resolvePath(allocator, io, path, options.*);
         defer allocator.free(resolved_path);
 
         std.log.info("Attempting to parse ninja file '{s}'", .{resolved_path});
@@ -1350,6 +1379,7 @@ const Generator = struct {
                     const cmake_options = cmake.CMakeOptions{
                         .build_type = .fromOptimizeMode(options.configuration),
                         .bin_path = options.cmake_bin_path,
+                        .definitions = options.definitions,
                     };
                     const result = try cmake.generate(
                         allocator,
@@ -1588,6 +1618,9 @@ const cmake = struct {
 
         /// Should more information about the 'cmake' command execution be printed?
         verbose: bool = false,
+
+        /// List of definitions to add when invoking CMake.
+        definitions: std.StringHashMapUnmanaged([]const u8) = .empty,
     };
 
     /// Result from generating a 'build.ninja' using 'cmake'.
@@ -1659,6 +1692,18 @@ const cmake = struct {
         try arguments.append("'-DCMAKE_CXX_COMPILER=zig c++'");
         try arguments.append("-DCMAKE_MAKE_PROGRAM=ninja");
         try arguments.appendFormat("-DCMAKE_BUILD_TYPE={s}", .{options.build_type.toStr()});
+
+        var definitions = options.definitions.iterator();
+        while (definitions.next()) |definition| {
+            if (definition.value_ptr.len == 0) {
+                try arguments.appendFormat("-D{s}", .{definition.key_ptr.*});
+            } else {
+                try arguments.appendFormat("-D{s}={s}", .{
+                    definition.key_ptr.*,
+                    definition.value_ptr.*,
+                });
+            }
+        }
 
         var command = std.ArrayListUnmanaged(u8).empty;
         defer command.deinit(allocator);

@@ -21,6 +21,14 @@ pub fn main(init: std.process.Init) !void {
             options.print_summary = true;
         } else if (std.mem.eql(u8, arg, "--cmake-bin-path")) {
             options.cmake_bin_path = args.next();
+        } else if (std.mem.startsWith(u8, arg, "-D")) {
+            const definition = arg[2..];
+            if (std.mem.find(u8, definition, "=")) |pos| {
+                const offset = pos + 1;
+                try options.addDefinition(allocator, definition[0..pos], definition[offset..]);
+            } else {
+                try options.addDefinition(allocator, definition, "");
+            }
         }
     }
 
@@ -29,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     };
 
-    lib.generate(allocator, io, path, options) catch |err| {
+    lib.generate(allocator, io, path, &options) catch |err| {
         if (err == std.Io.File.OpenError.FileNotFound) {
             std.log.err("File '{s}' doesn't exist!", .{path});
         } else {
