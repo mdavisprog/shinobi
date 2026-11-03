@@ -858,18 +858,21 @@ const Generator = struct {
         var artifacts = try gatherArtifacts(allocator, parser);
         defer artifacts.deinit(allocator);
 
+        const root_path = try std.fmt.allocPrint(b.allocator, "{f}", .{b.root});
+        defer b.allocator.free(root_path);
+
         // Add all libraries first
         for (artifacts.list.items) |artifact| {
             if (artifact.output_type != .library) continue;
 
-            try addModule(b, artifact, artifacts, b.build_root.path.?, options.*);
+            try addModule(b, artifact, artifacts, root_path, options.*);
         }
 
         // Add all executables next
         for (artifacts.list.items) |artifact| {
             if (artifact.output_type != .executable) continue;
 
-            try addExecutable(b, artifact, artifacts, b.build_root.path.?, options.*);
+            try addExecutable(b, artifact, artifacts, root_path, options.*);
         }
     }
 

@@ -29,10 +29,7 @@ pub fn build(b: *std.Build) !void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
-
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     // Set up the 'test' step.
     const test_step = b.step("test", "Run tests");
@@ -52,15 +49,18 @@ pub fn build(b: *std.Build) !void {
 }
 
 fn copyLibraryToExamples(b: *std.Build) !void {
-    const root_path_lazy = b.path("");
-    const root_path_cache = try root_path_lazy.getPath4(b, null);
+    const root_path_cache = try std.fmt.allocPrint(b.allocator, "{f}", .{b.root});
+    defer b.allocator.free(root_path_cache);
 
-    const root_lib_path = try root_path_cache.joinString(b.allocator, "shinobi.zig");
+    const root_lib_path = try std.fs.path.join(b.allocator, &.{ root_path_cache, "shinobi.zig" });
     defer b.allocator.free(root_lib_path);
 
     std.log.info("Copying 'shinobi.zig' file to examples...", .{});
 
-    const plutovg_path = try root_path_cache.joinString(b.allocator, "examples/plutovg/shinobi.zig");
+    const plutovg_path = try std.fs.path.join(b.allocator, &.{
+        root_path_cache,
+        "examples/plutovg/shinobi.zig",
+    });
     defer b.allocator.free(plutovg_path);
 
     try std.Io.Dir.copyFileAbsolute(root_lib_path, plutovg_path, b.graph.io, .{});
