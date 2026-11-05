@@ -241,7 +241,7 @@ const Artifact = struct {
     /// Caller owns the returned string.
     fn getValidOutputName(self: Artifact, allocator: std.mem.Allocator) ![]const u8 {
         const result = self.getOutputName();
-        return try std.mem.replaceOwned(u8, allocator, result, "-", "_");
+        return try sanitizeName(allocator, result);
     }
 
     fn hasSameOutputs(self: Artifact, value: Artifact) bool {
@@ -1257,6 +1257,8 @@ const Generator = struct {
             const ext = std.fs.path.extension(input);
             if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
                 const name = std.fs.path.stem(input);
+                const sanitized_name = try sanitizeName(allocator, name);
+                defer allocator.free(sanitized_name);
 
                 if (added.contains(name)) continue;
                 try added.put(allocator, name, {});
@@ -1265,7 +1267,7 @@ const Generator = struct {
                     output_name,
                     if (artifact.output_type == .executable) ".root_module" else "",
                     name,
-                    name,
+                    sanitized_name,
                 });
             }
         }
@@ -1771,6 +1773,10 @@ const cmake = struct {
         std.log.err("stderr\n{s}", .{result.stderr});
     }
 };
+
+fn sanitizeName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    return try std.mem.replaceOwned(u8, allocator, name, "-", "_");
+}
 
 //
 // Tests
