@@ -1429,6 +1429,9 @@ const Generator = struct {
         var result = std.ArrayListUnmanaged([]const u8).empty;
         errdefer result.deinit(allocator);
 
+        var existing = std.StringHashMapUnmanaged(void).empty;
+        defer existing.deinit(allocator);
+
         var flags = artifact.flags.keyIterator();
         while (flags.next()) |flag| {
             if (!std.mem.startsWith(u8, flag.*, "-l")) {
@@ -1436,8 +1439,13 @@ const Generator = struct {
             }
 
             const name = flag.*[2..];
-            if (isValidSystemLibrary(name)) {
-                try result.append(allocator, name);
+            const stem = std.fs.path.stem(name);
+
+            if (existing.contains(stem)) continue;
+
+            if (isValidSystemLibrary(stem)) {
+                try result.append(allocator, stem);
+                try existing.put(allocator, stem, {});
             }
         }
 
