@@ -833,6 +833,12 @@ const Generator = struct {
         InvalidRule,
     };
 
+    /// Represents a path to an include directory.
+    const Include = struct {
+        path: []const u8,
+        is_dir_after: bool,
+    };
+
     fn add(
         self: Generator,
         b: *std.Build,
@@ -1131,30 +1137,11 @@ const Generator = struct {
         var written = std.ArrayListUnmanaged(Artifact).empty;
         defer written.deinit(allocator);
 
-        var includes = std.ArrayListUnmanaged([]const u8).empty;
+        var includes = std.ArrayListUnmanaged(Include).empty;
         defer includes.deinit(allocator);
 
         outer: for (input_artifacts.items) |input_artifact| {
-            var flags = input_artifact.flags.keyIterator();
-            while (flags.next()) |flag| {
-                if (!std.mem.startsWith(u8, flag.*, "-I")) {
-                    continue;
-                }
-
-                const path = flag.*[2..];
-
-                var found = false;
-                for (includes.items) |include| {
-                    if (std.mem.eql(u8, path, include)) {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    try includes.append(allocator, path);
-                }
-            }
+            try appendIncludePaths(allocator, &includes, input_artifact);
 
             for (written.items) |item| {
                 if (item.hasSameOutputs(input_artifact)) continue :outer;
@@ -1184,7 +1171,7 @@ const Generator = struct {
 
             var it = input_artifact.flags.keyIterator();
             while (it.next()) |flag| {
-                if (std.mem.startsWith(u8, flag.*, "-I")) {
+                if (isIncludeFlag(flag.*)) {
                     continue;
                 }
 
@@ -1200,14 +1187,15 @@ const Generator = struct {
         }
 
         for (includes.items) |include| {
-            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, include);
+            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, include.path);
             defer allocator.free(relative);
 
             std.mem.replaceScalar(u8, relative, '\\', '/');
 
-            try writer.print("    {s}{s}.addIncludePath(b.path(\"{s}\"));\n", .{
+            try writer.print("    {s}{s}.{s}(b.path(\"{s}\"));\n", .{
                 name,
                 if (artifact.output_type == .executable) ".root_module" else "",
+                if (include.is_dir_after) "addAfterIncludePath" else "addIncludePath",
                 relative,
             });
         }
@@ -1330,6 +1318,10 @@ const Generator = struct {
         if (std.mem.eql(u8, flag, "-DNDEBUG")) return false;
         if (std.mem.eql(u8, flag, "-MD")) return false;
         if (std.mem.eql(u8, flag, "-MF")) return false;
+        if (std.mem.eql(u8, flag, "-Wundef")) return false;
+        if (std.mem.eql(u8, flag, "-D_MBCS")) return false;
+        if (std.mem.eql(u8, flag, "-include")) return false;
+        if (std.mem.eql(u8, flag, "-include-pch")) return false;
 
         if (std.mem.startsWith(u8, flag, "--dependent-lib")) return false;
 
@@ -1587,6 +1579,46 @@ const Generator = struct {
         for (artifact.inputs.items) |file| {
             const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
             try files.append(allocator, relative);
+        }
+    }
+
+    fn isIncludeFlag(flag: []const u8) bool {
+        return std.mem.startsWith(u8, flag, "-I") or
+            std.mem.startsWith(u8, flag, "-idirafter");
+    }
+
+    fn appendIncludePaths(
+        allocator: std.mem.Allocator,
+        includes: *std.ArrayListUnmanaged(Include),
+        artifact: Artifact,
+    ) !void {
+        var flags = artifact.flags.keyIterator();
+        while (flags.next()) |flag| {
+            const prefix_maybe: ?[]const u8 = if (std.mem.startsWith(u8, flag.*, "-I"))
+                "-I"
+            else if (std.mem.startsWith(u8, flag.*, "-idirafter"))
+                "-idirafter"
+            else
+                null;
+
+            const prefix = prefix_maybe orelse continue;
+            const path = flag.*[prefix.len..];
+            const is_dir_after = std.mem.eql(u8, prefix, "-idirafter");
+
+            var found = false;
+            for (includes.items) |include| {
+                if (std.mem.eql(u8, path, include.path)) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                try includes.append(allocator, .{
+                    .path = path,
+                    .is_dir_after = is_dir_after,
+                });
+            }
         }
     }
 };
