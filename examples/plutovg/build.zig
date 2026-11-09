@@ -9,16 +9,15 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .configuration = optimize,
     };
-    try shinobi.addDirectory(b, "external/plutovg", &options);
+    var result = try shinobi.addDirectory(b, "external/plutovg", &options);
+    defer result.deinit(b.allocator);
 
-    const plutovg_bindings = b.createModule(.{
+    var plutovg_bindings = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("plutovg.zig"),
-        .imports = &.{
-            .{ .name = "plutovg", .module = b.modules.get("plutovg").? },
-        },
     });
+    plutovg_bindings.linkLibrary(result.libraries.get("plutovg").?);
 
     const exe = b.addExecutable(.{
         .name = "smiley",

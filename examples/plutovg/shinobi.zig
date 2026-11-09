@@ -71,12 +71,40 @@ pub const Options = struct {
     }
 };
 
-/// Function to be used by a project's build system. Adding the directory will
-/// add all modules and executables needed to build the library located in this
-/// directory.
-pub fn addDirectory(b: *std.Build, path: []const u8, options: *Options) !void {
+/// Returns the list of libraries and executables that have been added through
+/// the parsed ninja file. The string names are owned by this struct and must
+/// have 'deinit' called on the library.
+pub const Result = struct {
+    /// List of libraries by artifact name.
+    libraries: std.StringHashMapUnmanaged(*std.Build.Step.Compile) = .empty,
+
+    /// List of executables by artifact name.
+    exes: std.StringHashMapUnmanaged(*std.Build.Step.Compile) = .empty,
+
+    /// Cleans up owned memory by this struct.
+    pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+        deinitSteps(allocator, &self.libraries);
+        deinitSteps(allocator, &self.exes);
+    }
+
+    fn deinitSteps(
+        allocator: std.mem.Allocator,
+        steps: *std.StringHashMapUnmanaged(*std.Build.Step.Compile),
+    ) void {
+        var it = steps.iterator();
+        while (it.next()) |step| {
+            allocator.free(step.key_ptr.*);
+        }
+        steps.deinit(allocator);
+    }
+};
+
+/// Function to be used by a project's build system. Gathers all artifacts parsed
+/// from the ninja file and returns map of libraries and executables by name. Caller
+/// owns the memory returned by the Result struct.
+pub fn addDirectory(b: *std.Build, path: []const u8, options: *Options) !Result {
     const generator = Generator{};
-    try generator.add(b, path, options);
+    return try generator.add(b, path, options);
 }
 
 /// Function to be used from a runtime application.
@@ -844,7 +872,7 @@ const Generator = struct {
         b: *std.Build,
         path: []const u8,
         options: *Options,
-    ) !void {
+    ) !Result {
         _ = self;
         defer options.deinit(b.allocator);
 
@@ -867,19 +895,35 @@ const Generator = struct {
         const root_path = try std.fmt.allocPrint(b.allocator, "{f}", .{b.root});
         defer b.allocator.free(root_path);
 
+        var result = Result{};
+
         // Add all libraries first
         for (artifacts.list.items) |artifact| {
             if (artifact.output_type != .library) continue;
 
-            try addModule(b, artifact, artifacts, root_path, options.*);
+            if (try addLibrary(b, artifact, artifacts, root_path, options.*)) |step| {
+                try result.libraries.put(
+                    allocator,
+                    try allocator.dupe(u8, artifact.getOutputName()),
+                    step,
+                );
+            }
         }
 
         // Add all executables next
         for (artifacts.list.items) |artifact| {
             if (artifact.output_type != .executable) continue;
 
-            try addExecutable(b, artifact, artifacts, root_path, options.*);
+            if (try addExecutable(b, artifact, artifacts, root_path, options.*)) |step| {
+                try result.exes.put(
+                    allocator,
+                    try allocator.dupe(u8, artifact.getOutputName()),
+                    step,
+                );
+            }
         }
+
+        return result;
     }
 
     fn generate(
@@ -1513,14 +1557,37 @@ const Generator = struct {
         try addSourceFiles(module, artifact, artifacts, build_dir);
     }
 
+    fn addLibrary(
+        b: *std.Build,
+        artifact: Artifact,
+        artifacts: Artifact.Collection,
+        build_dir: []const u8,
+        options: Options,
+    ) !?*std.Build.Step.Compile {
+        if (artifact.output_type != .library) return null;
+
+        const library = b.addLibrary(.{
+            .name = artifact.getOutputName(),
+            .linkage = .static,
+            .root_module = b.createModule(.{
+                .target = options.target,
+                .optimize = options.configuration,
+            }),
+        });
+
+        try addSourceFiles(library.root_module, artifact, artifacts, build_dir);
+
+        return library;
+    }
+
     fn addExecutable(
         b: *std.Build,
         artifact: Artifact,
         artifacts: Artifact.Collection,
         build_dir: []const u8,
         options: Options,
-    ) !void {
-        if (artifact.output_type != .executable) return;
+    ) !?*std.Build.Step.Compile {
+        if (artifact.output_type != .executable) return null;
 
         const exe = b.addExecutable(.{
             .name = artifact.getOutputName(),
@@ -1531,6 +1598,8 @@ const Generator = struct {
         });
 
         try addSourceFiles(exe.root_module, artifact, artifacts, build_dir);
+
+        return exe;
     }
 
     fn addSourceFiles(
