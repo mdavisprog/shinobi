@@ -1077,6 +1077,20 @@ const Generator = struct {
         try writer.flush();
     }
 
+    fn writeAddLibrary(writer: *std.Io.Writer, name: []const u8, dynamic: bool) !void {
+        const linkage = if (dynamic) ".dynamic" else ".static";
+        try writer.print("    const {s} = b.addLibrary(.{{\n", .{name});
+        try writer.print("        .name = \"{s}\",\n", .{name});
+        try writer.print("        .linkage = {s},\n", .{linkage});
+        try writer.print("        .root_module = b.createModule(.{{\n", .{});
+        try writer.print("            .target = target,\n", .{});
+        try writer.print("            .optimize = optimize,\n", .{});
+        try writer.print("            .link_libc = true,\n", .{});
+        try writer.print("        }}),\n", .{});
+        try writer.print("    }});\n", .{});
+        try writer.flush();
+    }
+
     fn writeAddExecutable(writer: *std.Io.Writer, name: []const u8) !void {
         try writer.print("    const {s} = b.addExecutable(.{{\n", .{name});
         try writer.print("        .name = \"{s}\",\n", .{name});
@@ -1126,7 +1140,7 @@ const Generator = struct {
                 try writeAddExecutable(writer, name);
             },
             .library => {
-                try writeAddModule(writer, name);
+                try writeAddLibrary(writer, name, false);
             },
             else => return,
         }
@@ -1147,10 +1161,7 @@ const Generator = struct {
                 if (item.hasSameOutputs(input_artifact)) continue :outer;
             }
 
-            try writer.print("    {s}{s}.addCSourceFiles(.{{\n", .{
-                name,
-                if (artifact.output_type == .executable) ".root_module" else "",
-            });
+            try writer.print("    {s}.root_module.addCSourceFiles(.{{\n", .{name});
             try writer.print("        .files = &.{{\n", .{});
             try writer.flush();
 
@@ -1183,7 +1194,7 @@ const Generator = struct {
             try writer.print("    }});\n", .{});
             try writer.flush();
 
-            try writeImports(allocator, writer, artifact);
+            try writeLinkLibraries(allocator, writer, artifact);
         }
 
         for (includes.items) |include| {
@@ -1192,9 +1203,8 @@ const Generator = struct {
 
             std.mem.replaceScalar(u8, relative, '\\', '/');
 
-            try writer.print("    {s}{s}.{s}(b.path(\"{s}\"));\n", .{
+            try writer.print("    {s}.root_module.{s}(b.path(\"{s}\"));\n", .{
                 name,
-                if (artifact.output_type == .executable) ".root_module" else "",
                 if (include.is_dir_after) "addAfterIncludePath" else "addIncludePath",
                 relative,
             });
@@ -1205,7 +1215,7 @@ const Generator = struct {
             try writer.flush();
         }
 
-        try writeLibraries(allocator, writer, artifact);
+        try writeLinkSystemLibraries(allocator, writer, artifact);
     }
 
     fn writeInputs(
@@ -1261,7 +1271,41 @@ const Generator = struct {
         }
     }
 
-    fn writeLibraries(
+    fn writeLinkLibraries(
+        allocator: std.mem.Allocator,
+        writer: *std.Io.Writer,
+        artifact: Artifact,
+    ) !void {
+        switch (artifact.output_type) {
+            .executable, .library => {},
+            else => return,
+        }
+
+        var added = std.StringHashMapUnmanaged(void).empty;
+        defer added.deinit(allocator);
+
+        const output_name = try artifact.getValidOutputName(allocator);
+        defer allocator.free(output_name);
+
+        for (artifact.inputs.items) |input| {
+            const ext = std.fs.path.extension(input);
+            if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
+                const name = std.fs.path.stem(input);
+                const sanitized_name = try sanitizeName(allocator, name);
+                defer allocator.free(sanitized_name);
+
+                if (added.contains(name)) continue;
+                try added.put(allocator, name, {});
+
+                try writer.print("    {s}.root_module.linkLibrary({s});\n", .{
+                    output_name,
+                    sanitized_name,
+                });
+            }
+        }
+    }
+
+    fn writeLinkSystemLibraries(
         allocator: std.mem.Allocator,
         writer: *std.Io.Writer,
         artifact: Artifact,
@@ -1278,9 +1322,8 @@ const Generator = struct {
         defer libs.deinit(allocator);
 
         for (libs.items) |lib| {
-            try writer.print("    {s}{s}.linkSystemLibrary(\"{s}\", .{{}});\n", .{
+            try writer.print("    {s}.root_module.linkSystemLibrary(\"{s}\", .{{}});\n", .{
                 output_name,
-                if (artifact.output_type == .executable) ".root_module" else "",
                 lib,
             });
         }
