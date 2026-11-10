@@ -206,6 +206,7 @@ const Artifact = struct {
     pub const Type = enum {
         object,
         library,
+        shared_library,
         executable,
         other,
     };
@@ -253,7 +254,8 @@ const Artifact = struct {
     fn getOutputName(self: Artifact) []const u8 {
         if (self.outputs.items.len == 0) return switch (self.output_type) {
             .executable => "exe",
-            .library => "module",
+            .library => "library",
+            .shared_library => "shared_library",
             .object => "object",
             .other => "other",
         };
@@ -295,6 +297,13 @@ const Artifact = struct {
         }
 
         return true;
+    }
+
+    fn isLibrary(self: Artifact) bool {
+        return switch (self.output_type) {
+            .library, .shared_library => true,
+            else => false,
+        };
     }
 };
 
@@ -992,6 +1001,7 @@ const Generator = struct {
             var has_compile_command = false;
             var has_link_command = false;
             var has_clang_command = false;
+            var has_shared_command = false;
 
             var it = artifact.flags.keyIterator();
             while (it.next()) |flag| {
@@ -1014,12 +1024,18 @@ const Generator = struct {
                 if (std.mem.containsAtLeast(u8, flag.*, 1, "clang")) {
                     has_clang_command = true;
                 }
+
+                if (std.mem.eql(u8, flag.*, "-shared")) {
+                    has_shared_command = true;
+                }
             }
 
             artifact.output_type = if (has_compile_command)
                 .object
             else if (has_link_command)
                 .library
+            else if (has_shared_command)
+                .shared_library
             else if (has_clang_command)
                 .executable
             else
@@ -1153,12 +1169,19 @@ const Generator = struct {
         artifacts: Artifact.Collection,
         build_dir: []const u8,
     ) !void {
+        var libraries_written = std.StringHashMapUnmanaged(void).empty;
+        defer libraries_written.deinit(allocator);
+
         // Write all libraries first
         for (artifacts.list.items) |artifact| {
-            if (artifact.output_type != .library) continue;
-
-            try writeArtifact(allocator, writer, artifact, artifacts, build_dir);
-            try writer.print("\n", .{});
+            try writeArtifactLibrary(
+                allocator,
+                writer,
+                artifact,
+                artifacts,
+                build_dir,
+                &libraries_written,
+            );
         }
 
         // Write all executables next
@@ -1166,7 +1189,49 @@ const Generator = struct {
             if (artifact.output_type != .executable) continue;
 
             try writeArtifact(allocator, writer, artifact, artifacts, build_dir);
+            try writer.print("\n", .{});
         }
+    }
+
+    fn writeArtifactLibrary(
+        allocator: std.mem.Allocator,
+        writer: *std.Io.Writer,
+        artifact: Artifact,
+        artifacts: Artifact.Collection,
+        build_dir: []const u8,
+        written: *std.StringHashMapUnmanaged(void),
+    ) !void {
+        if (!artifact.isLibrary()) return;
+        if (written.contains(artifact.getOutputName())) return;
+
+        // Find any dependencies to write first.
+        for (artifact.inputs.items) |input| {
+            const ext = std.fs.path.extension(input);
+            if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
+                const name = std.fs.path.stem(input);
+
+                for (artifacts.list.items) |dependency| {
+                    if (!dependency.isLibrary()) continue;
+
+                    if (std.mem.eql(u8, name, dependency.getOutputName())) {
+                        try writeArtifactLibrary(
+                            allocator,
+                            writer,
+                            dependency,
+                            artifacts,
+                            build_dir,
+                            written,
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        try writeArtifact(allocator, writer, artifact, artifacts, build_dir);
+        try writer.print("\n", .{});
+
+        try written.put(allocator, artifact.getOutputName(), {});
     }
 
     fn writeArtifact(
@@ -1183,8 +1248,8 @@ const Generator = struct {
             .executable => {
                 try writeAddExecutable(writer, name);
             },
-            .library => {
-                try writeAddLibrary(writer, name, false);
+            .library, .shared_library => {
+                try writeAddLibrary(writer, name, artifact.output_type == .shared_library);
             },
             else => return,
         }
@@ -1321,7 +1386,7 @@ const Generator = struct {
         artifact: Artifact,
     ) !void {
         switch (artifact.output_type) {
-            .executable, .library => {},
+            .executable, .library, .shared_library => {},
             else => return,
         }
 
@@ -1355,7 +1420,7 @@ const Generator = struct {
         artifact: Artifact,
     ) !void {
         switch (artifact.output_type) {
-            .executable, .library => {},
+            .executable, .library, .shared_library => {},
             else => return,
         }
 
@@ -1568,7 +1633,7 @@ const Generator = struct {
 
         const library = b.addLibrary(.{
             .name = artifact.getOutputName(),
-            .linkage = .static,
+            .linkage = if (artifact.output_type == .shared_library) .dynamic else .static,
             .root_module = b.createModule(.{
                 .target = options.target,
                 .optimize = options.configuration,
