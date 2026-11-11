@@ -1779,7 +1779,19 @@ const Generator = struct {
                 null;
 
             const prefix = prefix_maybe orelse continue;
-            const path = flag.*[prefix.len..];
+            const start = prefix.len;
+            const path = blk: {
+                if (flag.*[start] == '"') {
+                    if (std.mem.find(u8, flag.*[(start+1)..], "\"")) |index| {
+                        break :blk flag.*[(start+1)..(start+index+1)];
+                    } else {
+                        break :blk flag.*[(start+1)..];
+                    }
+                } else {
+                    break :blk flag.*[start..];
+                }
+            };
+
             const is_dir_after = std.mem.eql(u8, prefix, "-idirafter");
 
             var found = false;
