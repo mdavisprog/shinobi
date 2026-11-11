@@ -1399,7 +1399,11 @@ const Generator = struct {
         for (artifact.inputs.items) |input| {
             const ext = std.fs.path.extension(input);
             if (std.mem.eql(u8, ext, ".lib") or std.mem.eql(u8, ext, ".a")) {
-                const name = std.fs.path.stem(input);
+                var name = std.fs.path.stem(input);
+                if (std.mem.startsWith(u8, name, "lib")) {
+                    name = name[3..];
+                }
+
                 const sanitized_name = try sanitizeName(allocator, name);
                 defer allocator.free(sanitized_name);
 
