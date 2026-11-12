@@ -32,18 +32,18 @@ pub fn build(b: *std.Build) !void {
     run_cmd.addPassthruArgs();
 
     // Set up the 'test' step.
-    const test_step = b.step("test", "Run tests");
-    const lib_test = b.addTest(.{
+    const test_runner = b.addTest(.{
+        .name = "test",
         .root_module = lib,
+        .test_runner = .{
+            .path = b.path("tests/runner.zig"),
+            .mode = .simple,
+        },
     });
-    const lib_test_run = b.addRunArtifact(lib_test);
-    test_step.dependOn(&lib_test_run.step);
 
-    const exe_test = b.addTest(.{
-        .root_module = exe.root_module,
-    });
-    const exe_test_run = b.addRunArtifact(exe_test);
-    test_step.dependOn(&exe_test_run.step);
+    const test_step = b.step("test", "Run tests");
+    const test_runner_artifact = b.addRunArtifact(test_runner);
+    test_step.dependOn(&test_runner_artifact.step);
 
     try copyLibraryToExamples(b);
 }
