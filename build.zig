@@ -32,18 +32,42 @@ pub fn build(b: *std.Build) !void {
     run_cmd.addPassthruArgs();
 
     // Set up the 'test' step.
-    const test_runner = b.addTest(.{
-        .name = "test",
+    const test_runner = std.Build.Step.Compile.TestRunner{
+        .path = b.path("tests/runner.zig"),
+        .mode = .simple,
+    };
+
+    const test_lib = b.addTest(.{
+        .name = "test-library",
         .root_module = lib,
-        .test_runner = .{
-            .path = b.path("tests/runner.zig"),
-            .mode = .simple,
-        },
+        .test_runner = test_runner,
     });
 
+    const test_root_dir = try std.fmt.allocPrint(b.allocator, "{f}/tests", .{b.root});
+    defer b.allocator.free(test_root_dir);
+
+    const test_suite_options = b.addOptions();
+    test_suite_options.addOption([]const u8, "root_dir", test_root_dir);
+
+    const test_suite = b.addTest(.{
+        .name = "test-suite",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/suite.zig"),
+            .imports = &.{
+                .{ .name = "shinobi", .module = lib },
+            },
+        }),
+        .test_runner = test_runner,
+    });
+    test_suite.root_module.addOptions("options", test_suite_options);
+
     const test_step = b.step("test", "Run tests");
-    const test_runner_artifact = b.addRunArtifact(test_runner);
-    test_step.dependOn(&test_runner_artifact.step);
+    const test_lib_artifact = b.addRunArtifact(test_lib);
+    const test_suite_artifact = b.addRunArtifact(test_suite);
+    test_step.dependOn(&test_lib_artifact.step);
+    test_step.dependOn(&test_suite_artifact.step);
 
     try copyLibraryToExamples(b);
 }

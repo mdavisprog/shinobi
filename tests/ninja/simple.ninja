@@ -1,0 +1,11 @@
+cflags = -Wall
+
+rule cc
+  command = clang $cflags -c $in -o $out
+
+rule link-exe
+  command = clang -o $out $in -Xclang
+
+build main.o: cc ../src/main.c
+
+build main.exe: link-exe main.o

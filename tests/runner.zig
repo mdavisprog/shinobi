@@ -26,13 +26,18 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
     const writer = Writer{ .handle = &stdout_file_writer.interface };
 
-    try writer.print("Running 'shinobi' test framework", .{});
+    const exe_path = try std.process.executablePathAlloc(init.io, init.gpa);
+    defer init.gpa.free(exe_path);
+
+    const test_name = std.fs.path.stem(exe_path);
+
+    try writer.print("Running test framework '{s}'", .{test_name});
 
     var pass: i32 = 0;
     var fail: i32 = 0;
 
     const test_functions = builtin.test_functions;
-    try writer.print("\nRunning {} tests...", .{test_functions.len});
+    try writer.print("Running {} tests...", .{test_functions.len});
     for (builtin.test_functions) |item| {
         item.func() catch |err| {
             try writer.print("Test '{s}' failed with error: {}", .{
@@ -54,4 +59,7 @@ pub fn main(init: std.process.Init) !void {
     if (fail == 0) {
         try writer.print("All tests passed!", .{});
     }
+
+    // Print an empty newline at the end.
+    try writer.print("", .{});
 }
