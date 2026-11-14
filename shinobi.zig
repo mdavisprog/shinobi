@@ -321,6 +321,7 @@ const Lexer = struct {
             colon,
             comment,
             include,
+            subninja,
         };
 
         token_type: Type,
@@ -545,6 +546,8 @@ const Lexer = struct {
             return .init(.colon, slice);
         } else if (std.mem.eql(u8, slice, "include")) {
             return .init(.include, slice);
+        } else if (std.mem.eql(u8, slice, "subninja")) {
+            return .init(.subninja, slice);
         } else if (std.mem.startsWith(u8, slice, "#")) {
             return .init(.comment, slice);
         } else if (slice.len > 0) {
@@ -2047,6 +2050,8 @@ test "lexer" {
         \\
         \\include Dir/rules.ninja
         \\
+        \\subninja Dir/clib.ninja
+        \\
         \\rule cc
         \\    command = gcc $cflags -c $in -o $out
         \\
@@ -2070,6 +2075,10 @@ test "lexer" {
     try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.include, "include"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.ident, "Dir/rules.ninja"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.subninja, "subninja"), try lexer.nextToken(allocator));
+    try expectEqualToken(allocator, .init(.ident, "Dir/clib.ninja"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.new_line, "\n"), try lexer.nextToken(allocator));
     try expectEqualToken(allocator, .init(.rule, "rule"), try lexer.nextToken(allocator));
