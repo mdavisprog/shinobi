@@ -6,11 +6,7 @@ const g_allocator = std.testing.allocator;
 const g_io = std.testing.io;
 
 test "simple" {
-    const ninja_file = try getSubPath(g_allocator, "ninja/simple.ninja");
-    defer g_allocator.free(ninja_file);
-
-    var shinobi_options = shinobi.Options{};
-    try shinobi.generate(g_allocator, g_io, ninja_file, &shinobi_options);
+    try generate(g_allocator, g_io, "ninja/simple.ninja");
 
     const script = try getBuildScript(g_allocator, g_io);
     defer g_allocator.free(script);
@@ -35,6 +31,63 @@ test "simple" {
 \\    b.installArtifact(main);
 \\
 );
+}
+
+test "include" {
+    try generate(g_allocator, g_io, "ninja/include.ninja");
+
+    const script = try getBuildScript(g_allocator, g_io);
+    defer g_allocator.free(script);
+
+    try expectContents(script,
+\\    const clib = b.addLibrary(.{
+\\        .name = "clib",
+\\        .linkage = .static,
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\            .link_libc = true,
+\\        }),
+\\    });
+\\    clib.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/clib.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\            "-DEFINED_VALUE",
+\\        },
+\\    });
+\\
+\\    const main = b.addExecutable(.{
+\\        .name = "main",
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\            .link_libc = true,
+\\        }),
+\\    });
+\\    main.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/main.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\            "-DEFINED_VALUE",
+\\        },
+\\    });
+\\    main.root_module.linkLibrary(clib);
+\\    b.installArtifact(main);
+\\
+);
+}
+
+fn generate(allocator: std.mem.Allocator, io: std.Io, sub_path: []const u8) !void {
+    const ninja_file = try getSubPath(allocator, sub_path);
+    defer allocator.free(ninja_file);
+
+    var shinobi_options = shinobi.Options{};
+    try shinobi.generate(allocator, io, ninja_file, &shinobi_options);
 }
 
 fn getSubPath(allocator: std.mem.Allocator, sub_path: []const u8) ![]const u8 {

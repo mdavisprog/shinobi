@@ -1,0 +1,11 @@
+cflags = -Wall
+
+rule cc
+    command = clang $cflags -c $in -o $out
+
+rule static-link
+    command = llvm-ar $in
+
+build clib.o: cc ../src/clib.c
+
+build clib.lib: static-link clib.o

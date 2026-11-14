@@ -1,0 +1,1 @@
+struct Lib1 {};

@@ -1,0 +1,19 @@
+# Tests inclusion of another .ninja file.
+
+# Defining a rule here first tests to make sure any rule found
+# with the same name is properly overridden and the memory freed.
+rule cc
+    command = clang $cflags -c $in -o $out
+
+include clib.ninja
+
+# Variable overrides variable in 'clib.ninja'. These are the flags used
+# throughout the generator process for all references to this variable.
+cflags = -Wall -DEFINED_VALUE
+
+rule link
+    command = clang -o $out $in -Xclang
+
+build main.o: cc ../src/main.c lib1.lib
+
+build main.exe: link main.o clib.lib
