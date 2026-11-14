@@ -629,6 +629,12 @@ const Parser = struct {
                 },
                 .rule => {
                     const rule = try self.parseRule(allocator);
+
+                    var to_remove = self.rules.fetchRemove(rule.name);
+                    if (to_remove) |*remove| {
+                        remove.value.deinit(allocator);
+                    }
+
                     try self.rules.put(allocator, rule.name, rule);
                 },
                 .build => {
@@ -866,6 +872,11 @@ const Parser = struct {
         {
             var it = other.rules.valueIterator();
             while (it.next()) |rule| {
+                var to_remove = self.rules.fetchRemove(rule.name);
+                if (to_remove) |*remove| {
+                    remove.value.deinit(allocator);
+                }
+
                 try self.rules.put(allocator, rule.name, rule.*);
             }
         }
