@@ -620,6 +620,11 @@ const Parser = struct {
                 .equals => {
                     const last = last_token orelse unreachable;
                     const variable = try self.parseVariable(allocator, last);
+
+                    if (self.variables.fetchRemove(variable.name)) |removed| {
+                        removed.value.deinit(allocator);
+                    }
+
                     try self.variables.put(allocator, variable.name, variable);
                 },
                 .rule => {
@@ -736,6 +741,11 @@ const Parser = struct {
                 .equals => {
                     const last = last_token orelse return Error.InvalidRule;
                     const variable = try self.parseVariable(allocator, last);
+
+                    if (variables.fetchRemove(variable.name)) |removed| {
+                        removed.value.deinit(allocator);
+                    }
+
                     try variables.put(allocator, variable.name, variable);
                     // The 'parseVariable' function will eat the '\n' token so need to mark
                     // flag as false.
@@ -844,6 +854,10 @@ const Parser = struct {
         {
             var it = other.variables.valueIterator();
             while (it.next()) |variable| {
+                if (self.variables.fetchRemove(variable.name)) |removed| {
+                    removed.value.deinit(allocator);
+                }
+
                 try self.variables.put(allocator, variable.name, variable.*);
             }
         }
