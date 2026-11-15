@@ -1,0 +1,13 @@
+# For now, just tests to ensure the '|' operator is ignored.
+
+cflags = -Wall
+
+rule cc
+    command = clang $cflags -c $in -o $out
+
+rule link
+    command = clang -o $out $in -Xclang
+
+build main.o: cc ../src/main.c|
+
+build main.exe: link main.o

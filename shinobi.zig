@@ -1395,7 +1395,8 @@ const Generator = struct {
         build_dir: []const u8,
     ) !void {
         for (artifact.inputs.items) |file| {
-            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
+            const real_path = sanitizeSourceFile(file) orelse file;
+            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, real_path);
             defer allocator.free(relative);
 
             std.mem.replaceScalar(u8, relative, '\\', '/');
@@ -1504,19 +1505,29 @@ const Generator = struct {
     }
 
     fn isValidSourceFile(file: []const u8) bool {
-        const stem = std.fs.path.stem(file);
+        // Find the '|' operator, used for denoting implicit dependencies.
+        const real_path = if (sanitizeSourceFile(file)) |real| real else file;
+
+        const stem = std.fs.path.stem(real_path);
         if (std.mem.eql(u8, stem, "CMakeCCompilerABI") or
             std.mem.eql(u8, stem, "CMakeCXXCompilerABI"))
         {
             return false;
         }
 
-        const ext = std.fs.path.extension(file);
+        const ext = std.fs.path.extension(real_path);
         if (!(std.mem.eql(u8, ext, ".c") or std.mem.eql(u8, ext, ".cpp"))) {
             return false;
         }
 
         return true;
+    }
+
+    fn sanitizeSourceFile(file: []const u8) ?[]const u8 {
+        return if (std.mem.find(u8, file, "|")) |index|
+            file[0..index]
+        else
+            file;
     }
 
     fn isValidFlag(flag: []const u8) bool {
@@ -1526,6 +1537,7 @@ const Generator = struct {
 
         // Ignore 'compile' and 'output' flag
         if (std.mem.eql(u8, flag, "-c")) return false;
+        if (std.mem.eql(u8, flag, "/c")) return false;
         if (std.mem.eql(u8, flag, "-o")) return false;
         if (std.mem.eql(u8, flag, "-D_MT")) return false;
         if (std.mem.eql(u8, flag, "-O3")) return false;
@@ -1534,6 +1546,7 @@ const Generator = struct {
         if (std.mem.eql(u8, flag, "-D_DLL")) return false;
         if (std.mem.eql(u8, flag, "-DNDEBUG")) return false;
         if (std.mem.eql(u8, flag, "-MD")) return false;
+        if (std.mem.eql(u8, flag, "-MMD")) return false;
         if (std.mem.eql(u8, flag, "-MF")) return false;
         if (std.mem.eql(u8, flag, "-Wundef")) return false;
         if (std.mem.eql(u8, flag, "-D_MBCS")) return false;
@@ -1900,7 +1913,8 @@ const Generator = struct {
         build_dir: []const u8,
     ) !void {
         for (artifact.inputs.items) |file| {
-            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, file);
+            const real_path = sanitizeSourceFile(file) orelse file;
+            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, real_path);
             try files.append(allocator, relative);
         }
     }

@@ -150,6 +150,34 @@ test "subninja" {
 );
 }
 
+test "dependency_implicit" {
+    try generate(g_allocator, g_io, "ninja/dependency_implicit.ninja");
+
+    const script = try getBuildScript(g_allocator, g_io);
+    defer g_allocator.free(script);
+
+    try expectContents(script,
+\\    const main = b.addExecutable(.{
+\\        .name = "main",
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\            .link_libc = true,
+\\        }),
+\\    });
+\\    main.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/main.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\        },
+\\    });
+\\    b.installArtifact(main);
+\\
+);
+}
+
 fn generate(allocator: std.mem.Allocator, io: std.Io, sub_path: []const u8) !void {
     const ninja_file = try getSubPath(allocator, sub_path);
     defer allocator.free(ninja_file);
