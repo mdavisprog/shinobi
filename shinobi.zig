@@ -570,12 +570,15 @@ const Parser = struct {
     pub const Error = error{
         InvalidRule,
         InvalidInclude,
+        InvalidSubNinja,
     };
 
     lexer: Lexer,
     variables: std.StringHashMapUnmanaged(Variable) = .empty,
     rules: std.StringHashMapUnmanaged(Rule) = .empty,
     builds: std.ArrayListUnmanaged(Build) = .empty,
+    children: std.ArrayListUnmanaged(Parser) = .empty,
+    parent: ?*const Parser = null,
 
     fn initStream(stream: []const u8) Parser {
         return .{
@@ -590,6 +593,11 @@ const Parser = struct {
     }
 
     fn deinit(self: *Parser, allocator: std.mem.Allocator, io: std.Io) void {
+        for (self.children.items) |*child| {
+            child.deinit(allocator, io);
+        }
+        self.children.deinit(allocator);
+
         {
             var it = self.variables.valueIterator();
             while (it.next()) |variable| {
@@ -646,6 +654,9 @@ const Parser = struct {
                 },
                 .include => {
                     try self.parseInclude(allocator, io);
+                },
+                .subninja => {
+                    try self.parseSubNinja(allocator, io);
                 },
                 else => {},
             }
@@ -855,7 +866,26 @@ const Parser = struct {
                 parser.builds.deinit(allocator);
                 parser.lexer.deinit(allocator, io);
             }
-        } else {}
+        }
+    }
+
+    fn parseSubNinja(self: *Parser, allocator: std.mem.Allocator, io: std.Io) !void {
+        const path_token = try self.lexer.nextToken(allocator) orelse return Error.InvalidInclude;
+        defer path_token.deinit(allocator);
+
+        if (self.lexer.getPath()) |path| {
+            if (std.fs.path.dirname(path)) |dir| {
+                const subninja_path = try std.fs.path.join(allocator, &.{ dir, path_token.data });
+                defer allocator.free(subninja_path);
+
+                var parser = try Parser.initFile(allocator, io, subninja_path);
+                parser.parent = self;
+
+                try parser.begin(allocator, io);
+
+                try self.children.append(allocator, parser);
+            }
+        }
     }
 
     fn move(self: *Parser, allocator: std.mem.Allocator, other: Parser) !void {
@@ -932,35 +962,7 @@ const Generator = struct {
         const root_path = try std.fmt.allocPrint(b.allocator, "{f}", .{b.root});
         defer b.allocator.free(root_path);
 
-        var result = Result{};
-
-        // Add all libraries first
-        for (artifacts.list.items) |artifact| {
-            if (artifact.output_type != .library) continue;
-
-            if (try addLibrary(b, artifact, artifacts, root_path, options.*)) |step| {
-                try result.libraries.put(
-                    allocator,
-                    try allocator.dupe(u8, artifact.getOutputName()),
-                    step,
-                );
-            }
-        }
-
-        // Add all executables next
-        for (artifacts.list.items) |artifact| {
-            if (artifact.output_type != .executable) continue;
-
-            if (try addExecutable(b, artifact, artifacts, root_path, options.*)) |step| {
-                try result.exes.put(
-                    allocator,
-                    try allocator.dupe(u8, artifact.getOutputName()),
-                    step,
-                );
-            }
-        }
-
-        return result;
+        return try addParser(b, parser, root_path, options.*);
     }
 
     fn generate(
@@ -1010,6 +1012,7 @@ const Generator = struct {
 
         try writeHeader(&writer.interface);
         try writeBuildVars(&writer.interface);
+        try writeSubParsers(allocator, &writer.interface, parser, absolute_dir);
         try writeArtifacts(allocator, &writer.interface, artifacts, absolute_dir);
         try writeFooter(&writer.interface);
 
@@ -1136,6 +1139,22 @@ const Generator = struct {
         var tokens = std.mem.tokenizeAny(u8, stream, " ");
         while (tokens.next()) |token| {
             try flags.put(allocator, token, {});
+        }
+    }
+
+    fn writeSubParsers(
+        allocator: std.mem.Allocator,
+        writer: *std.Io.Writer,
+        parser: Parser,
+        build_dir: []const u8,
+    ) !void {
+        for (parser.children.items) |child| {
+            try writeSubParsers(allocator, writer, child, build_dir);
+
+            var artifacts = try gatherArtifacts(allocator, child);
+            defer artifacts.deinit(allocator);
+
+            try writeArtifacts(allocator, writer, artifacts, build_dir);
         }
     }
 
@@ -1518,13 +1537,33 @@ const Generator = struct {
         }
 
         const rule_name = build.rule orelse return null;
-        const rule = parser.rules.get(rule_name) orelse return null;
+        const rule = getRule(rule_name, parser) orelse return null;
         if (rule.variables.get(name)) |variable| {
             return variable;
         }
 
         if (parser.variables.get(name)) |variable| {
             return variable;
+        }
+
+        if (parser.parent) |parent| {
+            if (getVariable(name, build, parent.*)) |variable| {
+                return variable;
+            }
+        }
+
+        return null;
+    }
+
+    fn getRule(name: []const u8, parser: Parser) ?Rule {
+        if (parser.rules.get(name)) |rule| {
+            return rule;
+        }
+
+        if (parser.parent) |parent| {
+            if (getRule(name, parent.*)) |rule| {
+                return rule;
+            }
         }
 
         return null;
@@ -1652,6 +1691,66 @@ const Generator = struct {
         });
 
         try addSourceFiles(module, artifact, artifacts, build_dir);
+    }
+
+    fn addParser(
+        b: *std.Build,
+        parser: Parser,
+        build_dir: []const u8,
+        options: Options,
+    ) !Result {
+        const allocator = b.allocator;
+
+        var result = Result{};
+
+        // Add all sub-parsers first.
+        for (parser.children.items) |child| {
+            var sub_result = try addParser(b, child, build_dir, options);
+            defer sub_result.deinit(allocator);
+
+            var libraries = sub_result.libraries.iterator();
+            while (libraries.next()) |library| {
+                const key = try allocator.dupe(u8, library.key_ptr.*);
+                try result.libraries.put(allocator, key, library.value_ptr.*);
+            }
+
+            var exes = sub_result.exes.iterator();
+            while (exes.next()) |exe| {
+                const key = try allocator.dupe(u8, exe.key_ptr.*);
+                try result.exes.put(allocator, key, exe.value_ptr.*);
+            }
+        }
+
+        var artifacts = try gatherArtifacts(allocator, parser);
+        defer artifacts.deinit(allocator);
+
+        // Add all libraries first
+        for (artifacts.list.items) |artifact| {
+            if (artifact.output_type != .library) continue;
+
+            if (try addLibrary(b, artifact, artifacts, build_dir, options)) |step| {
+                try result.libraries.put(
+                    allocator,
+                    try allocator.dupe(u8, artifact.getOutputName()),
+                    step,
+                );
+            }
+        }
+
+        // Add all executables next
+        for (artifacts.list.items) |artifact| {
+            if (artifact.output_type != .executable) continue;
+
+            if (try addExecutable(b, artifact, artifacts, build_dir, options)) |step| {
+                try result.exes.put(
+                    allocator,
+                    try allocator.dupe(u8, artifact.getOutputName()),
+                    step,
+                );
+            }
+        }
+
+        return result;
     }
 
     fn addLibrary(
