@@ -26,6 +26,13 @@ const std = @import("std");
 // Public
 //
 
+/// Controls how the detail level of logs produced by this library.
+pub const Verbosity = enum {
+    none,
+    minimal,
+    verbose,
+};
+
 /// List of options to control the generator.
 pub const Options = struct {
     /// Prints the summary of what has been parsed.
@@ -45,6 +52,9 @@ pub const Options = struct {
     /// This container will own any memory given to it. User should use the
     /// 'addDefinition' function to populate this field.
     definitions: std.StringHashMapUnmanaged([]const u8) = .empty,
+
+    /// How detailed the logs should be.
+    verbosity: Verbosity = .minimal,
 
     /// Cleans up owned memory by this struct.
     pub fn deinit(self: *Options, allocator: std.mem.Allocator) void {
@@ -103,6 +113,8 @@ pub const Result = struct {
 /// from the ninja file and returns map of libraries and executables by name. Caller
 /// owns the memory returned by the Result struct.
 pub fn addDirectory(b: *std.Build, path: []const u8, options: *Options) !Result {
+    Log.verbosity = options.verbosity;
+
     const generator = Generator{};
     return try generator.add(b, path, options);
 }
@@ -114,6 +126,8 @@ pub fn generate(
     path: []const u8,
     options: *Options,
 ) !void {
+    Log.verbosity = options.verbosity;
+
     const generator = Generator{};
     try generator.generate(allocator, io, path, options);
 }
@@ -949,7 +963,7 @@ const Generator = struct {
         const resolved_path = try resolvePath(allocator, io, path, options.*);
         defer b.allocator.free(resolved_path);
 
-        std.log.info("Attempting to parse ninja file '{s}'", .{resolved_path});
+        Log.minimal("Attempting to parse ninja file '{s}'", .{resolved_path});
 
         var parser = try Parser.initFile(allocator, io, resolved_path);
         defer parser.deinit(allocator, io);
@@ -978,14 +992,14 @@ const Generator = struct {
         const resolved_path = try resolvePath(allocator, io, path, options.*);
         defer allocator.free(resolved_path);
 
-        std.log.info("Attempting to parse ninja file '{s}'", .{resolved_path});
+        Log.minimal("Attempting to parse ninja file '{s}'", .{resolved_path});
 
         var parser = try Parser.initFile(allocator, io, resolved_path);
         defer parser.deinit(allocator, io);
 
         try parser.begin(allocator, io);
 
-        std.log.info("Generating 'build.zig' file", .{});
+        Log.minimal("Generating 'build.zig' file", .{});
 
         const dir = std.fs.path.dirname(resolved_path) orelse {
             std.log.err("Failed to retrieve directory of ninja file '{s}'!", .{resolved_path});
@@ -1593,13 +1607,14 @@ const Generator = struct {
                 if (entry.kind != .file) continue;
 
                 if (std.mem.eql(u8, entry.name, "build.ninja")) {
-                    std.log.info("Found 'build.ninja' file in given path.", .{});
+                    Log.minimal("Found 'build.ninja' file in given path.", .{});
                     return std.fs.path.join(allocator, &.{ path, entry.name });
                 } else if (std.mem.eql(u8, entry.name, "CMakeLists.txt")) {
                     const cmake_options = cmake.CMakeOptions{
                         .build_type = .fromOptimizeMode(options.configuration),
                         .bin_path = options.cmake_bin_path,
                         .definitions = options.definitions,
+                        .verbose = options.verbosity == .verbose,
                     };
                     const result = try cmake.generate(
                         allocator,
@@ -2041,7 +2056,7 @@ const cmake = struct {
         path: []const u8,
         options: CMakeOptions,
     ) !GenerateResult {
-        std.log.info("Running 'cmake' to generate 'build.ninja' file.", .{});
+        Log.minimal("Running 'cmake' to generate 'build.ninja' file.", .{});
 
         var arguments = Arguments.init(allocator);
         defer arguments.deinit();
@@ -2078,7 +2093,7 @@ const cmake = struct {
             try command.append(allocator, ' ');
         }
 
-        std.log.info("Running command '{s}'", .{command.items});
+        Log.minimal("Running command '{s}'", .{command.items});
 
         const result = std.process.run(allocator, io, .{
             .argv = arguments.list.items,
@@ -2131,6 +2146,30 @@ const cmake = struct {
     fn printResult(result: std.process.RunResult) void {
         std.log.warn("stdout\n{s}", .{result.stdout});
         std.log.err("stderr\n{s}", .{result.stderr});
+    }
+};
+
+/// Central location for all logging behavior.
+const Log = struct {
+    /// This will be set by the user through the 'Options' struct.
+    var verbosity: Verbosity = .minimal;
+
+    fn minimal(comptime format: []const u8, args: anytype) void {
+        switch (verbosity) {
+            .none => return,
+            else => {},
+        }
+
+        std.log.info(format, args);
+    }
+
+    fn verbose(comptime format: []const u8, args: anytype) void {
+        switch (verbosity) {
+            .none, .minimal => return,
+            else => {},
+        }
+
+        std.log.info(format, args);
     }
 };
 

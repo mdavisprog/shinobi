@@ -154,7 +154,9 @@ fn generate(allocator: std.mem.Allocator, io: std.Io, sub_path: []const u8) !voi
     const ninja_file = try getSubPath(allocator, sub_path);
     defer allocator.free(ninja_file);
 
-    var shinobi_options = shinobi.Options{};
+    var shinobi_options = shinobi.Options{
+        .verbosity = .none,
+    };
     try shinobi.generate(allocator, io, ninja_file, &shinobi_options);
 }
 
