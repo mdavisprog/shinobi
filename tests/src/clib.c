@@ -1,1 +1,1 @@
-struct Lib1 {};
+struct CLib {};

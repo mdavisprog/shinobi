@@ -1,0 +1,6 @@
+rule cc
+    command = clang $cflags -c $in -o $out
+
+build child.o: cc ../src/clib.c
+
+build child.lib: child-link child.o

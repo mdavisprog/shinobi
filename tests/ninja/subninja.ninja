@@ -1,0 +1,22 @@
+# Tests 'subninja' of another .ninja file.
+
+rule cc
+    command = clang $cflags -c $in -o $out
+
+subninja clib.ninja
+
+cflags = -Wall -DEFINED_VALUE
+
+# Define the rule for linking the child here to test
+# child finding the rule in the parent.
+rule child-link
+    command = llvm-ar $in
+
+subninja child.ninja
+
+rule link
+    command = clang -o $out $in -Xclang
+
+build main.o: cc ../src/main.c
+
+build main.exe: link main.o clib.lib child.lib

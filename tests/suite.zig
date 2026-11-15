@@ -82,6 +82,74 @@ test "include" {
 );
 }
 
+test "subninja" {
+    try generate(g_allocator, g_io, "ninja/subninja.ninja");
+
+    const script = try getBuildScript(g_allocator, g_io);
+    defer g_allocator.free(script);
+
+    try expectContents(script,
+\\    const clib = b.addLibrary(.{
+\\        .name = "clib",
+\\        .linkage = .static,
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\            .link_libc = true,
+\\        }),
+\\    });
+\\    clib.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/clib.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\        },
+\\    });
+\\
+\\    const child = b.addLibrary(.{
+\\        .name = "child",
+\\        .linkage = .static,
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\            .link_libc = true,
+\\        }),
+\\    });
+\\    child.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/clib.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\            "-DEFINED_VALUE",
+\\        },
+\\    });
+\\
+\\    const main = b.addExecutable(.{
+\\        .name = "main",
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\            .link_libc = true,
+\\        }),
+\\    });
+\\    main.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/main.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\            "-DEFINED_VALUE",
+\\        },
+\\    });
+\\    main.root_module.linkLibrary(clib);
+\\    main.root_module.linkLibrary(child);
+\\    b.installArtifact(main);
+\\
+);
+}
+
 fn generate(allocator: std.mem.Allocator, io: std.Io, sub_path: []const u8) !void {
     const ninja_file = try getSubPath(allocator, sub_path);
     defer allocator.free(ninja_file);
