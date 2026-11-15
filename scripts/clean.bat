@@ -10,7 +10,8 @@ SET OUT=zig-out
 SET DIRS=%CACHE%^
     %OUT%^
     "examples/plutovg/%CACHE%"^
-    "examples/plutovg/%OUT%"
+    "examples/plutovg/%OUT%"^
+    "examples/plutovg/external/plutovg/Build"
 
 ECHO Cleaning...
 FOR %%A in (%DIRS%) do (

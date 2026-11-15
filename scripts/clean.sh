@@ -8,6 +8,7 @@ DIRS=(
     zig-out
     examples/plutovg/.zig-cache
     examples/plutovg/zig-out
+    examples/plutovg/external/plutovg/Build
 )
 
 for DIR in "${DIRS[@]}"
