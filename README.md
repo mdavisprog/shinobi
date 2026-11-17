@@ -18,8 +18,9 @@ This section describes what options can be passed into the library or program to
 
 |Name       |Description|Library    |Program    |
 |:----------|:----------|:----------|:----------|
-|Print Summary|Prints a summary of what artifacts were generated.|.print_summary|--print-summary|
-|Target|Controls what architecture to target.|.target|Not Supported Yet|
-|Configuration|Controls whether to use debug or release optimizations.|.configuration|Not Supported Yet|
-|CMake Binary Path|Specify the directory where the 'cmake' executable is located if not in the environment path.|.cmake_bin_path|--cmake-bin-path|
-|Definitions|Add definitions to be passed into the native generator.|addDefinition(key, value)|-D{DEFINITION}|
+|print_summary|Prints a summary of what artifacts were generated.|.print_summary|--print-summary|
+|target|Controls what architecture to target.|.target|Not Supported Yet|
+|configuration|Controls whether to use debug or release optimizations.|.configuration|Not Supported Yet|
+|cmake_bin_path|Specify the directory where the 'cmake' executable is located if not in the environment path.|.cmake_bin_path|--cmake-bin-path|
+|definitions|Add definitions to be passed into the native generator.|addDefinition(key, value)|-D{DEFINITION}|
+|verbosity|Controls how much information is logged out during execution.|.none/.minimal/.verbose|--verbose [none/minimal/verbose]|
