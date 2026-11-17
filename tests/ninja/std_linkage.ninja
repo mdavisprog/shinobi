@@ -1,0 +1,4 @@
+# Test for setting 'link_libc' or 'link_licpp'
+
+include clib.ninja
+include cpplib.ninja

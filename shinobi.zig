@@ -1206,7 +1206,6 @@ const Generator = struct {
         try writer.print("        .root_module = b.createModule(.{{\n", .{});
         try writer.print("            .target = target,\n", .{});
         try writer.print("            .optimize = optimize,\n", .{});
-        try writer.print("            .link_libc = true,\n", .{});
         try writer.print("        }}),\n", .{});
         try writer.print("    }});\n", .{});
         try writer.flush();
@@ -1218,7 +1217,6 @@ const Generator = struct {
         try writer.print("        .root_module = b.createModule(.{{\n", .{});
         try writer.print("            .target = target,\n", .{});
         try writer.print("            .optimize = optimize,\n", .{});
-        try writer.print("            .link_libc = true,\n", .{});
         try writer.print("        }}),\n", .{});
         try writer.print("    }});\n", .{});
         try writer.flush();
@@ -1324,6 +1322,7 @@ const Generator = struct {
         var includes = std.ArrayListUnmanaged(Include).empty;
         defer includes.deinit(allocator);
 
+        var found_cpp = false;
         outer: for (input_artifacts.items) |input_artifact| {
             try appendIncludePaths(allocator, &includes, input_artifact);
 
@@ -1338,12 +1337,20 @@ const Generator = struct {
             try writeInputs(allocator, writer, input_artifact, build_dir);
             try written.append(allocator, input_artifact);
 
+            if (!found_cpp) {
+                found_cpp = hasCPPFile(input_artifact);
+            }
+
             for (input_artifacts.items) |inner| {
                 if (input_artifact.hasSameOutputs(inner)) continue;
 
                 if (input_artifact.hasSameFlags(inner)) {
                     try writeInputs(allocator, writer, inner, build_dir);
                     try written.append(allocator, inner);
+
+                    if (!found_cpp) {
+                        found_cpp = hasCPPFile(inner);
+                    }
                 }
             }
 
@@ -1363,6 +1370,12 @@ const Generator = struct {
             try writer.print("        }},\n", .{});
             try writer.print("    }});\n", .{});
             try writer.flush();
+
+            if (found_cpp) {
+                try writer.print("    {s}.root_module.link_libcpp = true;\n", .{name});
+            } else {
+                try writer.print("    {s}.root_module.link_libc = true;\n", .{name});
+            }
 
             try writeLinkLibraries(allocator, writer, artifact);
         }
@@ -1386,6 +1399,18 @@ const Generator = struct {
         }
 
         try writeLinkSystemLibraries(allocator, writer, artifact);
+    }
+
+    fn hasCPPFile(artifact: Artifact) bool {
+        for (artifact.inputs.items) |file| {
+            const sanitized = sanitizeSourceFile(file) orelse file;
+            const ext = std.fs.path.extension(sanitized);
+            if (std.mem.eql(u8, ext, ".cpp")) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     fn writeInputs(
@@ -1894,7 +1919,21 @@ const Generator = struct {
             }
         }
 
-        module.link_libc = true;
+        var found_cpp = false;
+        for (files.items) |file| {
+            const ext = std.fs.path.extension(file);
+            if (std.mem.eql(u8, ext, ".cpp")) {
+                found_cpp = true;
+                break;
+            }
+        }
+
+        if (found_cpp) {
+            module.link_libcpp = true;
+        } else {
+            module.link_libc = true;
+        }
+
         module.addCSourceFiles(.{
             .files = try files.toOwnedSlice(allocator),
             .flags = try flags.toOwnedSlice(allocator),

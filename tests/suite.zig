@@ -17,7 +17,6 @@ test "simple" {
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    main.root_module.addCSourceFiles(.{
@@ -28,6 +27,7 @@ test "simple" {
 \\            "-Wall",
 \\        },
 \\    });
+\\    main.root_module.link_libc = true;
 \\    b.installArtifact(main);
 \\
 );
@@ -46,7 +46,6 @@ test "include" {
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    clib.root_module.addCSourceFiles(.{
@@ -58,13 +57,13 @@ test "include" {
 \\            "-DEFINED_VALUE",
 \\        },
 \\    });
+\\    clib.root_module.link_libc = true;
 \\
 \\    const main = b.addExecutable(.{
 \\        .name = "main",
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    main.root_module.addCSourceFiles(.{
@@ -76,6 +75,7 @@ test "include" {
 \\            "-DEFINED_VALUE",
 \\        },
 \\    });
+\\    main.root_module.link_libc = true;
 \\    main.root_module.linkLibrary(clib);
 \\    b.installArtifact(main);
 \\
@@ -95,7 +95,6 @@ test "subninja" {
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    clib.root_module.addCSourceFiles(.{
@@ -106,6 +105,7 @@ test "subninja" {
 \\            "-Wall",
 \\        },
 \\    });
+\\    clib.root_module.link_libc = true;
 \\
 \\    const child = b.addLibrary(.{
 \\        .name = "child",
@@ -113,7 +113,6 @@ test "subninja" {
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    child.root_module.addCSourceFiles(.{
@@ -125,13 +124,13 @@ test "subninja" {
 \\            "-DEFINED_VALUE",
 \\        },
 \\    });
+\\    child.root_module.link_libc = true;
 \\
 \\    const main = b.addExecutable(.{
 \\        .name = "main",
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    main.root_module.addCSourceFiles(.{
@@ -143,6 +142,7 @@ test "subninja" {
 \\            "-DEFINED_VALUE",
 \\        },
 \\    });
+\\    main.root_module.link_libc = true;
 \\    main.root_module.linkLibrary(clib);
 \\    main.root_module.linkLibrary(child);
 \\    b.installArtifact(main);
@@ -162,7 +162,6 @@ test "dependency_implicit" {
 \\        .root_module = b.createModule(.{
 \\            .target = target,
 \\            .optimize = optimize,
-\\            .link_libc = true,
 \\        }),
 \\    });
 \\    main.root_module.addCSourceFiles(.{
@@ -173,7 +172,54 @@ test "dependency_implicit" {
 \\            "-Wall",
 \\        },
 \\    });
+\\    main.root_module.link_libc = true;
 \\    b.installArtifact(main);
+\\
+);
+}
+
+test "standard linkage" {
+    try generate(g_allocator, g_io, "ninja/std_linkage.ninja");
+
+    const script = try getBuildScript(g_allocator, g_io);
+    defer g_allocator.free(script);
+
+    try expectContents(script,
+\\    const clib = b.addLibrary(.{
+\\        .name = "clib",
+\\        .linkage = .static,
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\        }),
+\\    });
+\\    clib.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/clib.c",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\        },
+\\    });
+\\    clib.root_module.link_libc = true;
+\\
+\\    const cpplib = b.addLibrary(.{
+\\        .name = "cpplib",
+\\        .linkage = .static,
+\\        .root_module = b.createModule(.{
+\\            .target = target,
+\\            .optimize = optimize,
+\\        }),
+\\    });
+\\    cpplib.root_module.addCSourceFiles(.{
+\\        .files = &.{
+\\            "../src/cpplib.cpp",
+\\        },
+\\        .flags = &.{
+\\            "-Wall",
+\\        },
+\\    });
+\\    cpplib.root_module.link_libcpp = true;
 \\
 );
 }
