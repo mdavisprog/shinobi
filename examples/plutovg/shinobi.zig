@@ -960,7 +960,16 @@ const Generator = struct {
         const allocator = b.allocator;
         const io = b.graph.io;
 
-        const resolved_path = try resolvePath(allocator, io, path, options.*);
+        const root_path = try std.fmt.allocPrint(b.allocator, "{f}", .{b.root});
+        defer b.allocator.free(root_path);
+
+        const absolute_path = try std.fs.path.resolveAlloc(allocator, &.{
+            root_path,
+            path,
+        });
+        defer allocator.free(absolute_path);
+
+        const resolved_path = try resolvePath(allocator, io, absolute_path, options.*);
         defer b.allocator.free(resolved_path);
 
         Log.minimal("Attempting to parse ninja file '{s}'", .{resolved_path});
@@ -973,10 +982,9 @@ const Generator = struct {
         var artifacts = try gatherArtifacts(allocator, parser);
         defer artifacts.deinit(allocator);
 
-        const root_path = try std.fmt.allocPrint(b.allocator, "{f}", .{b.root});
-        defer b.allocator.free(root_path);
+        const build_dir = std.fs.path.dirname(resolved_path) orelse resolved_path;
 
-        return try addParser(b, parser, root_path, options.*);
+        return try addParser(b, parser, build_dir, options.*);
     }
 
     fn generate(
@@ -1871,6 +1879,9 @@ const Generator = struct {
         var files = std.ArrayListUnmanaged([]const u8).empty;
         var flags = std.ArrayListUnmanaged([]const u8).empty;
 
+        const root_dir = try std.fmt.allocPrint(allocator, "{f}", .{module.owner.root});
+        defer allocator.free(root_dir);
+
         outer: for (input_artifacts.items) |input_artifact| {
             var it = input_artifact.flags.keyIterator();
             while (it.next()) |flag| {
@@ -1898,14 +1909,14 @@ const Generator = struct {
             }
 
             try written.append(allocator, input_artifact);
-            try gatherSourceFiles(allocator, &files, input_artifact, build_dir);
+            try gatherSourceFiles(allocator, &files, input_artifact, build_dir, root_dir);
 
             for (input_artifacts.items) |inner| {
                 if (input_artifact.hasSameOutputs(inner)) continue;
 
                 if (input_artifact.hasSameFlags(inner)) {
                     try written.append(allocator, inner);
-                    try gatherSourceFiles(allocator, &files, inner, build_dir);
+                    try gatherSourceFiles(allocator, &files, inner, build_dir, root_dir);
                 }
             }
 
@@ -1940,7 +1951,16 @@ const Generator = struct {
         });
 
         for (includes.items) |include| {
-            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, include);
+            const include_resolved = blk: {
+                if (!std.fs.path.isAbsolute(include)) {
+                    break :blk try resolveLocalPath(allocator, build_dir, include);
+                } else {
+                    break :blk try allocator.dupe(u8, include);
+                }
+            };
+            defer allocator.free(include_resolved);
+
+            const relative = try std.fs.path.relative(allocator, build_dir, null, root_dir, include_resolved);
             module.addIncludePath(module.owner.path(relative));
         }
     }
@@ -1950,10 +1970,11 @@ const Generator = struct {
         files: *std.ArrayListUnmanaged([]const u8),
         artifact: Artifact,
         build_dir: []const u8,
+        root_dir: []const u8,
     ) !void {
         for (artifact.inputs.items) |file| {
             const real_path = sanitizeSourceFile(file) orelse file;
-            const relative = try std.fs.path.relative(allocator, ".", null, build_dir, real_path);
+            const relative = try std.fs.path.relativeAlloc(allocator, build_dir, null, root_dir, real_path);
             try files.append(allocator, relative);
         }
     }
@@ -2228,6 +2249,60 @@ const Log = struct {
 
 fn sanitizeName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     return try std.mem.replaceOwned(u8, allocator, name, "-", "_");
+}
+
+fn resolveLocalPath(
+    allocator: std.mem.Allocator,
+    absolute: []const u8,
+    relative: []const u8,
+) ![]const u8 {
+    const sep_token = std.fmt.comptimePrint("{c}", .{std.fs.path.sep});
+    const parent_dir_token = std.fmt.comptimePrint("..{s}", .{sep_token});
+
+    const absolute_alloc = try allocator.dupe(u8, absolute);
+    const relative_alloc = try allocator.dupe(u8, relative);
+
+    defer allocator.free(absolute_alloc);
+    defer allocator.free(relative_alloc);
+
+    std.mem.replaceScalar(u8, absolute_alloc, '/', std.fs.path.sep);
+    std.mem.replaceScalar(u8, relative_alloc, '/', std.fs.path.sep);
+
+    var absolute_slice = trim(absolute_alloc, "\"");
+    var relative_slice = trim(relative_alloc, "\"");
+
+    var count: i32 = 0;
+    while (std.mem.find(u8, relative_slice, parent_dir_token)) |index| {
+        count += 1;
+        relative_slice = relative_slice[(index + parent_dir_token.len)..];
+    }
+
+    var parent_count: i32 = 0;
+    while (std.mem.findLast(u8, absolute_slice, sep_token)) |index| {
+        absolute_slice = absolute_slice[0..index];
+        parent_count += 1;
+        if (parent_count >= count) break;
+    }
+
+    return try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+        absolute_slice,
+        sep_token,
+        relative_slice,
+    });
+}
+
+fn trim(string: []const u8, token: []const u8) []const u8 {
+    var result = string;
+
+    if (std.mem.startsWith(u8, result, token)) {
+        result = result[token.len..];
+    }
+
+    if (std.mem.endsWith(u8, result, token)) {
+        result = result[0..(result.len - token.len)];
+    }
+
+    return result;
 }
 
 //
