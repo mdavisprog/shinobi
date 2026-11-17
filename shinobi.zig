@@ -31,6 +31,22 @@ pub const Verbosity = enum {
     none,
     minimal,
     verbose,
+
+    pub fn fromString(value: []const u8) Verbosity {
+        if (std.mem.eql(u8, value, "none")) {
+            return .none;
+        }
+
+        if (std.mem.eql(u8, value, "minimal")) {
+            return .minimal;
+        }
+
+        if (std.mem.eql(u8, value, "verbose")) {
+            return .verbose;
+        }
+
+        return .minimal;
+    }
 };
 
 /// List of options to control the generator.

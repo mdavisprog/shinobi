@@ -21,6 +21,10 @@ pub fn main(init: std.process.Init) !void {
             options.print_summary = true;
         } else if (std.mem.eql(u8, arg, "--cmake-bin-path")) {
             options.cmake_bin_path = args.next();
+        } else if (std.mem.startsWith(u8, arg, "--verbosity")) {
+            if (args.next()) |verbosity| {
+                options.verbosity = .fromString(verbosity);
+            }
         } else if (std.mem.startsWith(u8, arg, "-D")) {
             const definition = arg[2..];
             if (std.mem.find(u8, definition, "=")) |pos| {
