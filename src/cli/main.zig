@@ -5,6 +5,8 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
+    std.log.info("Running shinobi ({s})", .{lib.version.toString()});
+
     var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
 

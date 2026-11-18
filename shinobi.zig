@@ -26,6 +26,21 @@ const std = @import("std");
 // Public
 //
 
+/// The current version of this library.
+pub const version = struct {
+    pub const major: u8 = 0;
+    pub const minor: u8 = 1;
+    pub const revision: u8 = 0;
+
+    pub fn toString() []const u8 {
+        return std.fmt.comptimePrint("{}.{}.{}", .{
+            major,
+            minor,
+            revision,
+        });
+    }
+};
+
 /// Controls how the detail level of logs produced by this library.
 pub const Verbosity = enum {
     none,
